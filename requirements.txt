@@ -1,0 +1,16 @@
+# 国服怀旧服自动练级 — 运行依赖（仅 Windows）
+opencv-python
+numpy
+pynput
+requests
+pyyaml
+PySide6
+ruamel.yaml
+# 中文绘制：cv2.putText 用的 Hershey 字体画不了中文（会变成 ???），
+# 画布上的中文标签改由 PIL 绘制（见 src/utils/common.py 的 put_text_cn）
+Pillow
+pyinstaller
+pygetwindow
+pywin32
+windows-capture
+interception-python

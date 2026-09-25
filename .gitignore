@@ -1,0 +1,41 @@
+# 构建产物
+build/
+build_user/
+build_dev/
+dist/
+*.spec
+
+# 运行时产物
+screenshot/
+video/
+log/
+debug/
+*.log
+*.prof
+*__pycache__/
+*.pyc
+
+# 编辑器 / 系统
+*.DS_Store
+.idea/
+.vscode/
+
+# 打包生成的临时文件
+*.config_tmp.yaml
+*.exe
+
+# ── 个人数据（★ 公开仓库的核心红线，不要放开）─────────────────────────
+# 主界面「配置方案」另存的自定义方案：里面含角色名、按键、地图
+config/*.yaml
+!config/config_default.yaml
+!config/config_custom.yaml
+!config/config_data.yaml
+!config/config_data.blank.yaml
+
+# 角色名标签模板（文件名就是角色名）
+nametag/*.png
+nametag/*.jpg
+
+# 个人录制的路线与截图（地图目录名可能暴露挂机点位）
+# minimaps/ 与 monster/ 出厂只有 .gitkeep；如果你要公开自己做的
+# 通用模板，请手动 git add -f 明确指定文件，不要整体放开。

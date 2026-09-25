@@ -1,0 +1,56 @@
+sequenceDiagram
+    participant H as HuntingState.on_frame
+    participant B as MapleStoryAutoBot
+    participant R as update_cmd_by_route
+    participant G as check_reach_goal
+    participant M as update_cmd_by_mob_detection
+
+    H->>R: update_cmd_by_route()
+    Note over R: 【① 新判定·插入点①】每帧**只算一次** d_home / d_main
+    R->>B: _main_dist() → (d_main, seg_i)  ← 走 _main_pts_xy 缓存
+    R->>B: _home_dist() → (d_home, line)   ← **只算已武装的线**
+    B->>B: home_d_home / home_d_main 存实例字段（② 直接读，口径唯一）
+    alt 不在回正 且 img_route_home 非 None
+        alt _home_line_pick() 命中（d_home < d_main - tol **且** 冷静期已过）
+            R->>B: _enter_home_route("离回正线 0px < 离主线 6px - 2", line)
+        end
+    end
+    alt 已在回正状态
+        R->>B: home_frame += 1
+        alt 已超时 > home_timeout(8s)
+            R->>B: _exit_home_route("回正超时", disarm=True)
+            Note over B: 该**线**去 armed=False + 全局冷静期 10s（D1+D2）
+            R->>R: cmd = none/none/none；**return** 〈D3：本帧不再走后面的分支〉
+        else 未超时
+            alt _home_dwell_ok() 为 False（保险丝，默认 0 = 常开）
+                Note over R: 屏蔽退出判定（防一进就出）
+            else
+                R->>B: try_return_to_mainline()
+                Note over B: 内核 = _home_line_keep(home_d_home, home_d_main)
+                alt d_home >= d_main - tol（**主线优先**）
+                    B->>B: idx_routes = seg_i
+                    B->>B: _exit_home_route("已回到主线") → armed=True、冷静期清零
+                else d_home < d_main - tol
+                    Note over B: 保持回正，继续沿回正线走
+                end
+            end
+        end
+    end
+    R->>B: get_nearest_color_code()（img_route 上找最近色码）
+    alt 一个像素都找不到
+        alt 不在回正 且 _home_reenter_allowed()
+            R->>B: 老兜底 P1-3：_enter_home_route("主线附近找不到路线（走丢了）")
+        end
+        alt 仍在回正
+            R->>B: _exit_home_route("回正线接不上", disarm=True)
+        end
+        R->>B: cmd_move_x/y = none（纪律：绝不保持上一帧方向）
+    else 找到
+        R->>B: 解析 cmd_move_x / cmd_move_y / cmd_action
+    end
+    H->>G: check_reach_goal()
+    Note over G: 回正状态下 goal **仍不是**退出条件（只打节流日志）
+    H->>M: update_cmd_by_mob_detection()
+    alt is_using_home_route
+        M-->>H: 直接 return（回正期间不打怪，P1-4）
+    end

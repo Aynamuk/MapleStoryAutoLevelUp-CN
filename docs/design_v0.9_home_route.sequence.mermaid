@@ -1,0 +1,41 @@
+sequenceDiagram
+    participant H as HuntingState.on_frame
+    participant B as MapleStoryAutoBot
+    participant R as update_cmd_by_route
+    participant G as check_reach_goal
+    participant M as update_cmd_by_mob_detection
+
+    H->>B: run_once 已算好 loc_player_global / img_route
+    H->>R: update_cmd_by_route()
+    Note over R: 【新增·插入点①】落点锚触发<br/>（最前面，主线像素可见也要能进）
+    R->>B: _home_anchor_triggered()
+    alt 踩到某个已武装锚点 且 当前不在回正
+        R->>B: _enter_home_route("触发落点锚 (x,y)")
+        B->>B: is_using_home_route=True / img_route=img_route_home<br/>home_enter_pos / home_enter_t / home_frame=0
+    end
+    alt 已在回正状态
+        R->>B: home_frame += 1
+        alt 已超时 > home_timeout(8s)
+            R->>B: _exit_home_route("回正超时", disarm=True)
+            Note over B: 锚点保持去武装：需离开 R+2 或 30s 才重新武装
+        else 未超时
+            R->>B: try_return_to_mainline()
+            Note over B: 【新增·插入点②】门未开直接 return False
+            alt 门已开 且 离主线 <= max(2, min(10, D-3))
+                B->>B: _exit_home_route("已回到主线") → armed=True
+            end
+        end
+    end
+    R->>B: get_nearest_color_code()（锚点色在独立字典，不会被取到 → 不卡住）
+    alt 一个像素都找不到
+        R->>B: 老逻辑：不在回正则尝试进回正；仍在回正则退出回正（保留，不动）
+        R->>B: cmd_move_x/y = none（纪律：绝不保持上一帧方向）
+    else 找到
+        R->>B: 解析 cmd_move_x / cmd_move_y / cmd_action
+    end
+    H->>G: check_reach_goal()
+    Note over G: 【修改】回正状态下**不再**因 cmd_action=="goal" 退出<br/>（只打一条节流日志），退出完全交给 try_return_to_mainline
+    H->>M: update_cmd_by_mob_detection()
+    alt is_using_home_route
+        M-->>H: 直接 return（回正期间不打怪，P1-4 维持现状）
+    end

@@ -1,0 +1,87 @@
+classDiagram
+    class MapleStoryAutoBot {
+        -img_route_home : ndarray
+        -is_using_home_route : bool
+        -color_code_home_anchor : dict
+        -home_anchors : list~dict~
+        -home_anchor : dict
+        -home_enter_pos : tuple
+        -home_enter_t : float
+        -home_frame : int
+        +load_config(cfg) int
+        +update_cmd_by_route() void
+        +try_return_to_mainline() bool
+        +check_reach_goal() void
+        +validate_route_image(img, name) tuple
+        -_route_pixels(img, include_anchor) list
+        -_scan_home_anchors(map_name, img_home, img_routes) list
+        -_home_anchor_triggered() dict
+        -_enter_home_route(reason, anchor) void
+        -_exit_home_route(reason, disarm) void
+        -_home_dwell_ok() bool
+        -_home_return_radius() int
+        -_nearest_mainline_dist(pt, max_radius) int
+        -_log_home_health() void
+    }
+
+    class HomeRouteIO {
+        <<module src.utils.home_route>>
+        +pick_color(p_from, p_to, action, color_code) tuple
+        +find_anchor_pixels(img_rgb, anchor_codes) list
+        +split_components(img_rgb, codes, anchor_codes) list
+        +stamp_anchor(img_bgr, pt, rgb, radius) void
+        +render_home_image(base_bgr, blobs, color_code) ndarray
+        +nearest_mainline_point(pt, route_imgs, codes) tuple
+        +calc_line_stats(anchor, goal, comp_pts, route_imgs, codes, cfg) dict
+        +validate_home_line(comp_pts, img_rgb, route_imgs, codes, anchor_codes, cfg) tuple
+        +load_home_notes(map_name) dict
+        +save_home_notes(map_name, data) bool
+        +manhattan(a, b) int
+    }
+
+    class HomeRouteDrawer {
+        <<PySide6 QDialog>>
+        -map_name : str
+        -scale : int
+        -img_out : ndarray
+        -view_rgb : ndarray
+        -cur_points : list
+        -cur_actions : list
+        -existing_lines : list
+        +open_for(map_name) int
+        -_rebuild_view() void
+        -_on_canvas_click(pos) void
+        -_screen_to_map(sx, sy) tuple
+        -_update_hint() void
+        -_save_line() bool
+        -_delete_selected() void
+    }
+
+    class RouteRecorder {
+        -_home_recording : bool
+        -_home_start_pos : tuple
+        +start_home_route() void
+        +finish_home_route() void
+        -_stamp_goal() void
+        -_stamp_anchor() void
+        -_dist_to_mainline() int
+    }
+
+    class HomeAnchor {
+        +id : int
+        +anchor : tuple
+        +goal : tuple
+        +D : int
+        +R : int
+        +span : int
+        +has_jump : bool
+        +away : tuple
+        +armed : bool
+        +disarm_t : float
+    }
+
+    MapleStoryAutoBot ..> HomeRouteIO : 扫描/判废/现算
+    MapleStoryAutoBot o-- HomeAnchor : home_anchors
+    HomeRouteDrawer ..> HomeRouteIO : 渲染/校验/落盘
+    RouteRecorder ..> HomeRouteIO : 盖锚点像素
+    MapleStoryAutoBot <.. HomeRouteDrawer : 产出 route_home.png（无直接调用）

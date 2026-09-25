@@ -1,0 +1,630 @@
+# ====== Default Configuration ======
+# DO NOT directly modify the following parameters
+# Put your own setting in config_edit_me.yaml instead.
+# --------------------------------------
+
+bot:
+  # 🔁 Bot Settings
+  mode: "normal"        # 挂机方式："normal"=巡逻绕圈（沿路线走，路过打怪）｜"stand"=定点驻守
+                        # （站安全点打附近怪，掉出去沿回家路线走回；安全点用 F5 在录制器里标定）
+  attack: "directional" # Options: "aoe_skill" "directional"
+  map: "" # Please refer to config/config_data.yaml
+
+key:
+  # 🎮 Keyboard Mapping
+  # Adjust the keys to match your in-game keybindings.
+  #
+  # Examples:
+  #   - "q":      Presses key Q
+  #   - "space":  Space bar
+  #   - "1":      Number key 1
+  #   - "ctrl":   Control key
+  #   - "alt":    Alt key
+  #   - "shift":  Shift key
+  aoe_skill: "q"            # 💥 AoE skill (e.g., Cleric's heal or Mage's lightning)
+  directional_attack: "w"   # ⚔️ Basic directional attack (e.g., Magic Claw or throwing stars)
+  teleport: "e"             # 🌀 Teleport skill. Set to "" if not usable
+  jump: "space"             # 🦘 Jump key
+  # 🦘 跳跃冷却（秒）：按一次跳之后，这段时间内**不再**发跳跃键。
+  #   为什么必须有（2026-09-13 用户实测）：
+  #     没有它时，角色只要站在 jump 像素上，键盘线程**每帧**就按一次跳
+  #     —— 30fps 下按 30 次/秒 = 连跳。表现是「跳上平台了还在跳，反而又跳出去了」。
+  #   1.0s ≈ 一次完整的起跳+滞空+落地（怀旧服普通跳约 0.7~0.9s），
+  #   盖住整个滞空才能真挡住连跳；设短了会在空中补第二跳，照样跳出去。
+  #   还连跳就往上加（1.2~1.5）；要连续跳台阶的图可以往下调（0.6~0.8）。
+  #   设 0 或负数 = 关闭冷却（退回老行为，不推荐）。
+  jump_cooldown: 1.0
+  return_home: "home"       # 🔁 Key to use return home scroll.
+
+buff_skill:
+  # 💫 Buff Skill
+  # Automatically apply buff skills when the cooldowns are ready.
+  # Buff skills are like: Mage's Magic Guard, Cleric's Angel's Blessing, Thief's Speed Boost
+  # ⚠️ Note: If your have a pet to apply buff for you, you can ignore this.
+  keys: []                # ⌨️ List of keys to cast each buff skill (e.g., ["a", "s"])
+  cooldown: []            # ⏱️ Cooldown time (in seconds), matches the order of `keys`
+  action_cooldown: 1      # 🕒 Delay (in seconds) after buffing before continuing actions
+
+directional_attack:
+  # 🗡️ Directional Attack
+  # Directional attacks are basic attack/skills that only attack player left or right.
+  # For examples, Mage’s Magic Claw, Thief’s dart throw, or even a snail shell toss are all directional attack
+  range_x: 350               # ↔️ Horizontal attack range (in pixels)
+  range_y: 70                # ↕️ Vertical attack range (in pixels)
+  cooldown: 0.9              # ⏱️ Time between attacks (in seconds)
+  # 🔄 转身保持帧数（2026-09-17 加）
+  #   出招前**按住方向键**多少帧，确保游戏里朝向真的切过来。
+  #   关键：出招那一帧必须**松开**方向键，否则技能会朝转身前的朝向飞走
+  #   —— 症状就是「后面的怪打不到，一直朝路线前进方向砍空气」。
+  #   0 = 不转身（等同旧行为，会砍空气）；3 ≈ 100ms，够游戏转身。
+  turn_frames: 3
+
+aoe_skill:
+  # 💥 AoE Skill
+  # AoE (Area of Effect) skills hit enemies no matter which direction the chrarcter is facing.
+  # For examples: Cleric’s Heal, Holy light, Mage’s Lightning Bolt are all AOE skills 
+  range_x: 400               # ↔️ Horizontal skill range (in pixels)
+  range_y: 170               # ↕️ Vertical skill range (in pixels)
+  cooldown: 0.05             # TODO: Currently just a filler
+
+# 血量监控（health_monitor）已于 2026-09-10 移除：
+# 它的血条识别把上游 UI 尺寸写死在代码里（注释明写 752x1282、条宽高比 7.5），
+# 国服是 Unity 重制 UI，这套判据实测不成立；而且找不到血条时静默返回、不报错，
+# 排查成本高。→ 喝药改由游戏内宠物 / 手动解决。
+
+# 边缘瞬移（edge_teleport）已于 2026-09-10 移除：
+# 它靠在路线图上找粉色标记来判断平台边缘，而那个标记代码不会自动生成，
+# 需要手工在每张路线图上涂一遍 —— 工序太重。改为把路线画得离平台边缘远一些。
+
+nametag:
+  # 🏷️ 角色名标签识别（国服唯一可用的角色定位方式）
+  # 原理：在游戏画面内用模板匹配定位自己角色头顶的名字标签，反推角色位置。
+  # 国服怀旧服无法通过组队血条识别角色位置，因此本项为必需功能，没有开关。
+  # 使用前必须先把 <name>.png 放到 nametag/ 目录下（截取自己角色头顶的名字标签）。
+  name: "example" # 加载 nametag/<name>.png 作为模板（填文件名，不含 .png）
+  mode: "grayscale"  # 🧪 匹配模式，可选："grayscale" "white_mask" "histogram_eq"
+  # 🎯 标定值：由「名字模板左上角」反推「角色中心」的偏移。**不是调参项，是量出来的数。**
+  #
+  # ⚠️ 代码真实语义（2026-09-10 核过 engine 第 433-435 行，与上游原版逐字一致）：
+  #      loc_player.x = 名字模板左上角x + 模板宽//2   → offset[0] **完全不生效**（填什么都不读）
+  #      loc_player.y = 名字模板左上角y − offset[1]   → 即 offset[1] = 名字顶边y − 角色中心y
+  #
+  # 📐 国服排布（2026-09-10 用户实测）：**人物在上、名字在下**，名字下面还有个更醒目的称号。
+  #    ⇒ 角色中心落在名字框的**上方** ⇒ offset[1] 应为**正数**（与默认值 +30 同向）。
+  #    框名字时**只框名字那一行**，别把下面的称号框进来（换称号就失配）。
+  #
+  # ⚠️ 但数值本身仍不可信：上游把 nametag 标为 deprecated（默认 enable:False、实际用组队血条），
+  #    所以 [-50, 30] 从未被标定验证过；上游那句注释的方向还与代码是反的。**别手填。**
+  #
+  # 🔧 标定方式：双击项目根的「标定名字标签.bat」（或 python -m tools.calibrate_nametag）——
+  #    框住名字那一行 + 点一下角色中心 → 自动反解本值并写进 config_custom.yaml。
+  offset: [-50, 30]
+  # 📏 命中阈值 [0.0 ~ 1.0]。底层 SQDIFF_NORMED（0=完全一样，1=完全不同），判据 `score < 阈值`，
+  #    所以 **值越大越宽松，值越小越严格**（原注释写成「越低越宽松」，方向是反的，已更正）。
+  #
+  #    取值依据（2026-09-10 实测；模板 = 名字白字掩码、整块匹配；11 个帧文件里 10 帧可评）：
+  #      · 6 张真实游戏帧（含跨地图）真位置得分 **0.0000 ~ 0.0057**，落点全部正确
+  #      · 已知假阳性：登录界面 **0.0466** / 0.0333（且落在"合法"区域！）、抓错窗口 0.0451
+  #    ⇒ 0.01 正好卡在两者中间：真帧有 1.8 倍以上余量，假阳性被挡掉 3 倍以上。
+  #    ⚠️ 宁可偏紧：阈值只决定"认不认这次命中"——**认错 = 位置错（危害大）**，
+  #       不认 = 沿用上一帧位置（几乎无害，角色帧间位移很小）。
+  #    ⚠️ 位置本身取的是**全图最低分**那一处，阈值不参与选位置。
+  #       上游旧值 0.2 太松：上面那些 0.03~0.05 的假阳性全能混过去。
+  diff_thres: 0.01
+
+  global_diff_thres: 0.01  # 🧠 先在上次位置±50px 内搜；分数低于此值就直接采用，不再全图搜
+  # If the diff is higher than this threshold, do a full-frame search.
+  # If lower, search near the last known location to save time.
+  # Set to 0.0 to disable this optimization
+  # ⚠️ 它也参与「命中」判定（find_pattern_sqdiff 里局部命中就直接返回），所以必须与 diff_thres
+  #    同量级；否则局部搜索会把 0.03~0.05 的假阳性当命中。
+
+  split_width: 999  # ✂️ **主匹配**用整块（必须 ≥ 模板宽）。填 999 → 60//999=0 → 1 块 = 整块。
+  # 上游默认 30 会让引擎把 60 宽的名字切成 2 块、**只取最好的一块**（=只用半个名字），
+  # 判别力反而变薄（实测左半块跨图真位置分 0.0092，离阈值 0.01 只剩 1.09 倍）。
+  # 主匹配必须用整块：跨地图实测真位置 0.0003、全图仅 1 处 <0.001，这是最干净的信号。
+
+  split_width_fallback: 30  # ✂️ **兜底匹配**的切块宽度（0 = 关闭兜底）
+  # 为什么要有兜底：名字底板会被**别的玩家的名牌压住**。实测 20 帧"人堆里走位"的帧：
+  #   只做整块 → 7/20 帧能定位；整块失败再退到切块 → **11/20 帧**，
+  #   救回来的那 4 帧落点全在合理轨迹上（整块 0.0174 刚过阈值被拒的那帧，半块拿到 0.0059）。
+  # 两遍共用 diff_thres：救回来的帧分数 0.0002~0.0059 都低于 0.01，而认不出的帧最低也有 0.0174
+  #   —— 一个阈值就切得开，不需要给兜底单独放宽。
+  # 代价：整块失败时才多跑一遍匹配（安静地图很少触发，几乎无成本）。
+  # ⚠️ 那 20 帧取自**极端拥挤的城镇**（用户为压测特意选的），正常刷怪点远没这么挤 ——
+  #   所以 7/20、11/20 应看成**最坏情况的下限**，不是日常值。
+
+character:
+  # 🧍 Character
+  # Your character's size in pixels.
+  # 用途：把「玩家自己」所在的矩形区域从怪物搜索里排除，避免把自己当怪。
+  # 三种模板模式（color / grayscale / contour_only）都会用到，不能删。
+  width: 100      # ↔️ Character width (in pixels)
+  height: 150     # ↕️ Character height (in pixels)
+
+monster_detect:
+  # 🌍 怪物模板的加载范围（2026-09-15 改：默认 true → false）
+  #    false = 只加载 config_data.yaml 里「这张图登记的」怪
+  #            （map_mobs_mapping[地图]）—— **这是上游原版的行为**，
+  #            上游根本没有 match_all_mobs 这个概念。
+  #    true  = 加载 monster/ 下的全部模板（本 fork 2026-09-12 加的"图省事"模式）。
+  #
+  #    ⚠️ 为什么默认改回 false（2026-09-15 实测）：
+  #       引擎对**每张 PNG** 都会生成「原图 + 左右镜像」两个模板
+  #       （见 engine 里 cv2.flip 那两行），所以实际匹配次数 = PNG 张数 × 2。
+  #       monster/ 下现有 20 张 PNG → 每次怪检测要跑 **40 次**全 ROI 模板匹配，
+  #       而「废都南方工地」只登记了木妖（9 张 → 18 次）。
+  #       白跑的那 22 次让怪检测吃掉一帧的 95%（244ms / 258ms），帧率卡在 3.8fps。
+  #    💡 换新图时记得用界面的【🐾 打哪几种怪…】给这张图勾一次；
+  #       没登记的话点「开始」会被弹窗拦住（不会静默变成"一次都不打怪"）。
+  #    💡 想回到「截一次、所有图通用」就把它设回 true（代价是每帧多匹配）。
+  match_all_mobs: false
+
+  # 🐌 Monster Detection
+  # Automatically detect monsters around your character.
+  # Detection mode determines the method used to find monsters.
+  # Modes ranked from most to least computational cost:
+  #   - "color"         (most accurate but slowest)
+  #   - "grayscale"     (slow)
+  #   - "contour_only"  (fast, contour-based, a good balance)
+  # 💡 Feel free to test different modes to find what works best for your setup.
+  mode: "contour_only"         # 🧠 Options: "color" "grayscale" "contour_only"
+  diff_thres: 0.8              # 📏 Diff threshold for template matching, [0.0 ~ 1.0] Lower = stricter match
+  search_box_margin: 50        # ➕ Additional margin(in pixels) around the attack box for monster searching
+  contour_blur: 5              # 🌫️ Gaussian blur kernel size used for contour smoothing (in "contour_only" mode).
+  with_enemy_hp_bar: False     # ❤️ 用怪物血条辅助检测。国服挂机打的是秒杀怪，血条不会出现，默认关闭；以后打精英/BOSS 可再开。
+  hp_bar_color: [71, 204, 64]  # 💚 Enemy HP bar color (in BGR format)
+  max_mob_area_trigger: 1500   # 📏 How much does the mob need to overlap with attack range to be considered as a target
+
+  # ⏱️ 每隔几帧才**真的**跑一次怪检测（2026-09-14 实测加）
+  #    1 = 每帧都跑（关掉降频，回到老行为）；2 = 每 2 帧跑一次（默认）
+  # ⚠️ 为什么需要它（真机实测数据）：一帧 552ms 里**怪检测占 502ms（91%）**，
+  #    是帧率卡在 1.8fps 的**唯一元凶**（抓帧 4ms、名字定位 16ms、小地图 5ms、
+  #    可视化 5ms —— 剩下的全不算什么）。
+  #    降频后省下的时间会让帧率涨回去：每 2 帧测一次 → 帧率 1.8→3.3，
+  #    而"两次检测之间"只从 552ms 变成 602ms（慢不到 0.1 秒），
+  #    换来的是导航 / 回正 / 按键响应快一倍 —— 很划算。
+  #    中间帧沿用上一次的结果（monster 列表保持不变）。
+  every_n_frames: 2
+
+# 换频道相关配置（channel_change / scheduled_channel_switching）已于 2026-09-10 移除：
+# 国服到处是人，「遇人换频道」等于一直换；「定时换频道」同理没有意义。
+
+ui_coords:
+  # 🧭 界面按钮坐标（**相对游戏客户区**，即 get_img_frame() 裁剪后的画面）
+  #
+  # ⚠️ 下面这组坐标是上游台服在 1282x693 画面上录的，对国服**已作废**。
+  #    重录方式：先量出真实客户区尺寸写入 game_window.size，
+  #    再在真实画面上框出按钮位置（登录按钮模板做好后一并标定）。
+  #    录制基准由 game_window.coord_base_size 声明，留 ~ 表示就是 game_window.size。
+  ui_y_start: 680                       # 📐 UI y start
+  "select_character": [888, 275]        # 📐 Select character button during login
+  login_button_thres: 0.05              # 📏 threshold to detect a login button on game window
+  login_button_top_left: [838, 317]     # 📐 top left corner of login button search ragne
+  login_button_bottom_right: [940, 373] # 📐 bottom right corner of login button search ragne
+
+route:
+  # 🧭 Route Following
+  # The character follows a pre-defined route image (route*.png) using color-coded commands.
+  search_range: 10            # 🔍 Radius (in pixels) to search for the nearest route color around the player
+
+  pingpong_single_route: true # 🔁 只录了**一段**主线时，走到头自动掉头往回走（2026-09-12 加）
+                              #    背景：单段时 `idx_routes = (idx+1)%1` 恒为 0，角色走到终点后
+                              #    仍跟着同一段走，而终点附近像素的指令还是"继续往前"
+                              #    → 一路冲出平台（实测：启动后直奔右边不停）。
+                              #    开着这个，录一条线就能在平台上来回走，不必录"去+回"两段。
+                              #    录了**两段及以上**时自动失效（靠 goal 切段循环）。
+  pingpong_turn_range: 15     # 📍 回程时离起点多近算"走到了"、该掉头（曼哈顿像素）。
+                              #    太小会走过头才掉头；太大还没走到就掉头，来回范围变短。
+
+  goal_reach_range: 15        # 🏁 离本段终点多近就算"这段走完了"、该切下一段（2026-09-12 加）
+                              #    背景：goal 圆点半径只有 2px，而玩家坐标是**质心**、
+                              #    踩不中就判不到 —— 平台本来不长时（实测路线跨度仅 12px），
+                              #    角色走过去却不触发切段，冲出去后再也找不到像素
+                              #    → 表现是「到终点停不下来一直往前走」。
+                              #    所以除了"踩到 goal 像素"，再补一条"离终点够近"的判定。
+                              #
+                              #    ⚠️★ 2026-09-16 订正：这里原来写的是"角色**一帧能走十几像素**"
+                              #    + "平台越短、角色跑得越快，这个值越要大一点" ——
+                              #    **那是推断、从没实测**。用真机日志实测是
+                              #    **~0.3 px/帧（≈4~5 px/秒）**，差 20~50 倍
+                              #    （三处互证：录制 7s 走 32px；挂机 5s 走 18px；
+                              #      用户自述"一个来回约 10 秒"= 48px）。
+                              #
+                              #    ⇒ 所以这个值**不是越大越好**：它大了会把短路线的巡逻行程吃掉。
+                              #      实测（废都南方工地，gap=24）：15 被 `_near_seg_goal`
+                              #      的上限二压到 11，两段的"已到达"区间贴在一起
+                              #      ⇒ 角色只在 **2px** 里来回蹭（日志实测 x 62~66），
+                              #      看起来就像"卡在一个很小的范围里"。
+                              #    ⇒ 现由 `_near_seg_goal` 的**上限三**兜底：
+                              #      reach ≤ gap/16（下限 1px）。所以这里保持 15 是安全的 ——
+                              #      短路线上会被自动收紧（gap=24 → reach=1），
+                              #      长路线（gap ≥ 240）仍按 15 生效。
+
+  endpoint_margin: 1          # 🛑 端点安全余量：把每段的终点朝**段内**收缩这么多像素，
+                              #    让角色提前掉头，别走到平台物理边缘（2026-09-13 加）。
+                              #    背景：主线是录到哪走到哪，很多人（包括我）会一路录到
+                              #    平台边缘 —— 于是"终点"就贴在悬崖上。角色走到终点才
+                              #    掉头，而掉头判定有一帧延迟 + 移动惯性，等反应过来已经
+                              #    踩空掉下平台了（用户实测：录制时没事，挂机却会走出去）。
+                              #    内缩之后，角色在离边缘还有 margin 像素时就掉头。
+                              #
+                              #    ⚠️★ **为什么现在是 1（2026-09-16 用户定，原来 4）**
+                              #    原来取 4 的依据是"过冲量约 2px，内缩量必须明显大于过冲
+                              #    才有效"（2026-09-13 实测）。而**过冲的根因是延迟** ——
+                              #    用户 2026-09-16 明确："掉坑是延迟的问题，延迟修好了，
+                              #    不太需要担心掉坑；而且没人会把路线录到那么极限。"
+                              #    ⇒ 不再需要留这么大余量。
+                              #    代价（实测）：margin=4 时你画的终点 80/48 被缩成 76/52，
+                              #    **白吃掉 8px**；改成 1 之后只吃掉 2px。
+                              #    本图巡逻行程实测：**24px → 30px**（你画的整条是 32px）。
+                              #    掉落的防线仍在：`_near_seg_goal` 的 reach 上限三（1px）
+                              #    + 可选的 `edge_guard` 地理围栏。
+                              #    设 0 = 不内缩（终点就是你画的那个点）。
+
+  edge_guard: false           # 🛑 平台边缘**硬**保护（2026-09-13 用户点名要的功能）
+                              #    ★ 2026-09-15 先关掉，做一次真机实验（理由见下）。
+                              #    背景：用户原话「没有平台边缘保护，挂机却会走出主线，
+                              #    掉到平台下面」。终点内缩 / reach 封顶 / 切段重新武装
+                              #    这些都是**软**保护 —— 靠状态机算得对不对；掉帧、
+                              #    坐标识别抖动、打怪位移都能让角色一帧冲出好几像素，
+                              #    软保护算得再准也追不上。这道围栏是**绝对地理围栏**：
+                              #    不管状态机怎么想，只要这一步会把角色带出「主线路线
+                              #    像素的 x 范围」，就把左右方向掰回来（left→right /
+                              #    right→left）。命中时日志会打「[边缘保护] …」。
+                              #    ⚠️ 走回正线（is_using_home_route）时**不生效** ——
+                              #    回正线本来就要往平台外走，干预会把角色按在坑底。
+                              #    设 false = 关掉（只留软保护）；读值非法时按 true 处理。
+                              #
+                              # ── ★ 2026-09-15 为什么先关掉（真机实测 + 算过）──────────
+                              # 帧率从 3.8 提到 15~17 fps 后，单帧位移从 6px 降到 **2px**
+                              # （日志原话「一帧约走 2px」）。而这道围栏要留的余量 =
+                              # **指令延迟期间的位移**（截图→主循环→键盘 约 3 帧）
+                              # = 3 × 2px = **6px**；两边各留 6px = **12px**。
+                              # 本图路线宽度只有 **10px**（全局 x 94~104）→ **几何上放不下**。
+                              # 实测症状：角色 3 分钟（2032 帧）只在 x=98~100 之间来回，
+                              #   [边缘保护] 在 98/100 两个位置各挡一个方向 → 2px 极限环，
+                              #   [is_player_stuck] 每 10 秒报一次（共 7 次）。
+                              # ⇒ 这不是参数没调好，是"保护要的余量 > 平台本身"。
+                              #   所以先关掉，验证「靠路线自己掉头 + 回正线兜底」够不够。
+                              # 💡 如果掉得太频繁，再回来试**放宽版**（而不是原样打开）：
+                              #   edge_guard: true + edge_guard_inset: 0 + edge_guard_react_frames: 1
+
+  edge_guard_row_tol: 2       # 📐 围栏按**行**取值时的 y 容差（像素）。
+                              #    围栏只用「角色当前 y ± 本值」这几行的路线像素算
+                              #    x 范围 —— 因为地图常有上下两层平台，把下层的 x
+                              #    也算进来的话，在上层走到边缘时围栏就不生效了。
+                              #    2 = 认角色脚下 ±2 行（小地图像素很粗，2 行已够）；
+                              #    调大 → 围栏更宽（可能把上下层连成一片，保护变松）；
+                              #    调小 → 更严，但角色在斜坡/台阶上可能取不到像素。
+                              #    ⚠️ 取到的行像素 < 2 个时**不启用**围栏
+                              #    （防止角色在梯子/空中时被误按在原地）。
+
+  edge_guard_react_frames: 3  # ⏱️ 围栏往前看几帧的位移（反应延迟补偿）。
+
+  # 🛡️ 平台边缘安全余量：把围栏边界往**里**收这么多像素（2026-09-14 加）
+  #    值越大 → 活动范围越窄、越不容易掉下去；**填 0 = 不收**（老行为）。
+  #    为什么需要：角色跳回平台时落点会偏 ±4~6px（跳跃保留水平速度，实测），
+  #    窄平台上这点偏移就足以让它掉出去；收一圈后落点偏了也还在安全区内。
+  # ⚠️ 跟上面的 endpoint_margin（**段终点**内缩）不是一回事：
+  #    那个管"走到哪掉头"，这个管"走到哪被拦住"，两者可叠加、不冲突。
+  # 💡 建议：窄平台 2~3，宽平台 0。可在界面「高级设置 → 路线」里直接改。
+  edge_guard_inset: 2
+
+  # 🐜 「窄平台降级」阈值（2026-09-15 加，用户点名要）
+  #    相邻两段终点的间距**小于**它 → 判定"这条路不值得来回巡逻"。
+  #    背景（真机实测）：本图巡逻线只有 10px 长、两段终点只差 4px，
+  #    切段判定的容差被 `(gap-2)//2` 压到 1px → 角色只能在 98~100 之间
+  #    **来回蹭 2px**：既走不动，又每 10 秒触发一次看门狗"卡死"
+  #    → 随机脱困指令把角色踹到别处（实测随机到 jump，跳到上一层平台）。
+  #    降级后的行为：
+  #      ① 不再来回蹭（站着面向最近的怪、正常出招）
+  #      ② 不判卡死 —— **但只限"画面里没有认出来的怪"时**；
+  #         附近有怪却不打，那是**真卡死**，照样交给脱困逻辑救。
+  #    💡 单段路线不受影响（靠 pingpong 走完全程，本来就不蹭）。
+  #    💡 调大 → 更多图会降级；调小 → 只有极窄的图降级；**填 0 = 关掉这个功能**。
+  patrol_min_gap: 24
+
+  # 🎯 回正**成功后**先走回安全区中心，再恢复正常巡逻（2026-09-14 实测加）
+  #    为什么：角色跳回主线时会**横移约 4px**，而回正期间边缘保护是**关掉的**
+  #    （回正线本来就要往平台外走）→ 落点完全没人管。实测落到 106（安全区
+  #    94~104 之外）那次，**同一秒就又掉下去了**。先回到中心，落地位置永远安全，
+  #    也给后续巡逻留出到边界的距离。
+  #    失败退出（超时 / 接不上）时**不**归位 —— 人还在坑底，归位只会跟回正打架。
+  home_recenter: true          # false = 关掉归位（回到老行为）
+  home_recenter_frames: 30     # ⏱️ 归位最多走几帧还没到中心就放弃（防把角色锁死）
+
+  # 🎯 回正**起跳前先停稳**（2026-09-14 实测：**已证明有害，默认关闭**）
+  #    起因：回正线画的是"走到主线正下方原地跳"，但角色是跑着进来的，
+  #    跳跃保留水平速度 → 实测落点 = 起跳点 ± 4~6px，一偏就贴到平台边缘。
+  #
+  #    ❌ 但"先停稳再跳"这条路走不通，实测两次失败：
+  #       ① 松开方向键后角色**仍会滑行**，根本停不下来 →
+  #          陷入「刹车 → 滑走 → 再刹车」死循环，回正从 0.6~3.2s 成功
+  #          恶化成 8.3s / 8.5s **超时失败**（走到起跳点 5 次都没跳上去）。
+  #       ② 更致命：**两个平台中间有缺口时必须"前跳"**（带着速度跳才能过去），
+  #          无差别刹车会让那种地形永远过不去。
+  #
+  #    ✅ 所以默认关。留着代码是为了以后真要做"选择性刹车"时能有个起点 ——
+  #      但那必须先能区分「垂直上跳」和「跨缺口前跳」两种地形，不能一刀切。
+  home_jump_brake: false       # ⚠️ 默认**关**：true 会破坏跨缺口地形
+  home_jump_brake_frames: 3    # ⏱️ 最多等几帧（等太久就照跳，防卡死）
+                              #    为什么要它：从「截图看到角色位置」到「按键真的生效」
+                              #    要穿过 截图 → 主循环 → 键盘 三个线程，每个线程各占
+                              #    一帧，所以指令生效时角色已经又走了几帧的距离。
+                              #    围栏只往前看 1 帧是不够的 —— 10 FPS 时实测过冲
+                              #    ~8.8px（平台才 14px 宽），必然冲出边缘。
+                              #    3 = 按 3 帧的位移做预判（默认三个线程各 1 帧）。
+                              #    ⚠️ 调大 → 更早掉头（更不容易掉，但巡逻范围更小）；
+                              #       调小 → 巡逻范围大，但可能来不及刹住。
+                              #       宁可调大：用户明确说过「一切以不掉落为优先」。
+
+  rescue_range: 40            # 🛟 Route-lost rescue radius. After being bumped/attacked, the player can
+                              #    easily drift farther than search_range from the route line; then no
+                              #    color code is found, the command goes blank and the character just
+                              #    stands idle until the watchdog barks (2026-09-12 实测：干站发呆).
+                              #    When NOTHING is found within search_range, rescan with this radius
+                            #    to re-capture the route. Kept separate from search_range because a
+                            #    wide normal search could latch onto a nearby parallel route segment
+                            #    and steer onto the wrong branch.
+
+  # ── 回正线（route_home.png）v0.9 **第二版**：删掉「落点锚」，改比两条线的距离 ──
+  #    判定只有一句话（进入 / 保持 / 退出**同一个表达式**，口径唯一）：
+  #        d_home = 角色到最近「已武装」回正线像素的曼哈顿距离
+  #        d_main = 角色到最近主线像素的曼哈顿距离（**全图**，不受 search_range 限制）
+  #        d_home < d_main - home_dist_tol  →  进 / 保持回正，沿回正线走回主线
+  #        否则                             →  主线优先（继续巡逻，或退出回正）
+  #
+  #    ⚠️ 为什么必须比两条线、不能写「不在主线上就回正」：坑底离主线只有 6px <
+  #       search_range(10) → 引擎"透过地板看得见主线" → 判定在主线上 → 永远不进回正
+  #       （第一版修掉的坑 1，别把它复活）。
+  #
+  #    第一版已删除（第二版不再有这些概念）：落点锚色码 127,0,127、触发半径 R、
+  #    离主线 D、方向侧判据、home_return_range / home_return_min（新方案退出不用半径，
+  #    留着是没有消费者的死配置）。
+
+  home_dist_tol: 2         # ⚖️ 比较容差。只有角色**明显**更靠近回正线时才进回正。
+                           #    验算（废都南方工地）：坑底中点 0 < 6-2 ✅；坑底两端 0 < 8-2 ✅；
+                           #    主线上巡逻 6 < 0-2 ❌（不误进）；竖段中段 0 < 3-2 ✅（不提前退出）；
+                           #    回正线终点贴主线时 0 < 0-2 ❌ → **相等时主线优先，自动退出回正**。
+                           #    ⚠️ 填负数视为"没配"，会回落默认 2。
+
+  home_min_cover_span: 5   # 🚫 判废④：起始段（离主线最远那批像素）的 **x 跨度** 下限。
+                           #    只画一条竖线时跨度 = 1 → 判废（角色掉在坑的左右两边接不住，
+                           #    见 PRD 2.4 的反例）。回正线必须画成 L 形：先沿坑底横着铺一段。
+  home_cover_far_tol: 2    # 📐 「离主线最远那一批」的容差：d_main(p) >= dmax - 本值 才算起始段。
+  home_goal_mainline_tol: 1 # 🚫 判废⑤：终点（goal）像素到主线的最小距离上限，**超过就判废**。
+                           #    ⚠️ 为什么是判废不是警告：终点离主线 5px 时，角色站上去仍是
+                           #       d_home=0 < 5-2 → 永远退不出回正，只能干等 8s 超时（= 第一版
+                           #       QA-18 那个洞在新方案里的对应物）。留容差等于把洞原样保留。
+                           #    ⚠️ 2026-09-13 从 2 收紧到 1（QA 发现）：goal 是半径 1 的十字
+                           #       （5px），容差 2 时竖段画在 x=107/108（平台外）也会因十字碰到
+                           #       平台边缘 (106,122) 而**放行** → 角色跳上去落空。收到 1 能多拦
+                           #       一部分临界；x=107/108 这个盲区靠本判据区分不了（十字必然碰
+                           #       到边缘），由手绘器「竖段画在平台外」的黄字提示兜住。
+  home_min_return_span: 5  # 🚫 判废③：起点→终点的曼哈顿距离 < 5px 视为废线（原地起头原地收尾）。
+
+  home_min_leave: 0        # 🚧 保险丝（**默认关闭**）：进入回正后离开进入点 ≥ N px
+                           #    才允许判定"已回到主线"。
+                           #    ⚠️ 为什么默认 0：新方案靠「相等时主线优先」自动处理抢跑，
+                           #       理论上不需要。实测若发现"一进就出"的抖动，再打开到 6。
+  home_min_frames: 0       # 🚧 保险丝（**默认关闭**）：或已回正 ≥ N 帧也算门开了（与上面取或）。
+                           #    抖动时打开到 15（≈0.5s）。
+
+  home_timeout: 8          # ⏱️ 回正超时（秒）。超时 → 退出回正、交还给打怪逻辑，
+                           #    并且**这条回正线**去武装（需离开它的范围 4px 或 30s 才重新武装）。
+                           #    ⚠️ 必须 < watchdog.timeout(10)：超时出口一定要先于看门狗，
+                           #       否则"回正接不上"会被看门狗当成卡死、抽随机动作乱走。
+                           #    ⚠️ 为什么必须去武装：新判定天然不带 armed 概念，超时退出后
+                           #       角色**仍站在坑底**（d_home 还是 0）→ 下一帧立刻重进 →
+                           #       home_enter_t 每帧归零 → 8s 超时退化成"每帧重置" →
+                           #       回正期间不打怪 = 实测过的「既不走也不打」死锁。
+                           #    ⚠️ **填 0 不会关掉它**，会回落默认 8（关掉 = 死锁回来）。
+  home_rearm_margin: 4     # 🔁 去武装后重新武装：角色离开这条线的**包围盒** ≥ 本值。
+  home_rearm_timeout: 30   # 🔁 去武装兜底：30s 后无条件重新武装（防永远武装不回来
+                           #    = 这条线被静默删除）。**填 0 不会关掉**，回落 30。
+  home_reenter_lock: 10    # 🧊 回正**失败**（超时 / 接不上）后的冷静期（秒）。
+                           #    这段时间内**任何**入口（新判定 + 老兜底）都不准进回正，
+                           #    老老实实打怪；到期后再试一次。
+                           #    ⚠️ 为什么必须有：超时退出那一帧角色仍在坑底，
+                           #       新判定 d_home < d_main - tol **仍然成立** → 下一帧立刻重进
+                           #       → 8s 超时永远走不到 → 实测 120/120 帧卡在回正里、既不走也不打。
+                           #    ⚠️ **填 0 不会关掉它**，会回落默认 10：
+                           #       冷静期这个逃生口会让超时出口重新变成死循环，弊大于利。
+
+  # ── 落点横段的「原地跳」区间（jump band，2026-09-14 加）─────────────────
+  #    上下两层平台的地形里，下层（坑底）的回正线通常画得比上层主线**长**：
+  #    主线横跨 x 20~40，坑底回正线却横跨 x 15~45。角色在 x=15~25 附近往左跳，
+  #    大概率**跳不到平台上**（右边同理）—— 只有站到**主线的正下方**原地起跳
+  #    才上得去。旧规则是「整条横段汇聚到拐角」：只有拐角那一列能起跳，而角色
+  #    在坑底一帧能走好几像素，根本落不上去 → 在横段两端之间来回震荡；极偶尔
+  #    蹭到那一列时人还在横向移动 → 起跳带着横向惯性 → 斜着跳、跳上平台又跳
+  #    出去（用户实测：「有很小的几率能跳回去」「位置错了，在平台边缘正下方往
+  #    反方向跳」）。
+  #    所以横段改成**三态分区**：区间左边往右走、区间内**原地跳**、区间右边往左走。
+  #    ⚠️ 这两个值只在**手绘保存**时用一次（把色着进 route_home.png）；
+  #       引擎运行期一个字节都不读 —— 改完要**重画**回正线才生效。
+  home_jump_band_max_drop: 8  # 📏 认「头顶上方主线」的最大落差（行）：只看
+                              #    pit_y - max_drop <= y < pit_y 这段里的主线像素
+                              #    （pit_y = 落点横段所在的 y，即坑底）。
+                              #    背景：比坑底高太多的主线是**上一层平台**，跳上去
+                              #    也够不着，算进区间会让角色在够不着的地方起跳。
+                              #    8 ≈ 一次普通跳能上的高度（怀旧服普通跳约 4~6px，
+                              #    实测废都南方工地落差 6px）留了余量。
+                              #    调大：会认到更上层的主线 → 区间变宽、更容易起跳，
+                              #      但也更容易在"够不着的平台正下方"反复空跳；
+                              #    调小：区间变窄（只在正正下方才能跳），
+                              #      调过头（< 实际落差）会**一个像素都认不到**
+                              #      → 算不出区间 → 自动回落成老的"汇聚到拐角"行为。
+                              #    设 0 = 只认与坑底同一行的主线（基本等于关掉）。
+  home_jump_band_inset: 5     # 🛑 「原地跳」区间距**平台边缘**的安全余量（像素）：
+                              #    区间两端各向内缩这么多，角色绝不会贴着悬崖起跳。
+                              #    背景（2026-09-14 实测，废都南方工地）：
+                              #      主线 y=122 横跨 x 92~106（平台只有 15px）。
+                              #      inset=1 → 跳跃区 = x 93~105，**几乎铺满整条横段**
+                              #        → 角色在坑底**第 1 帧原地起跳、起跳 x = 落点 x**，
+                              #        落在 90~93 就在平台外跳，落在 106~112 就一路走到
+                              #        105 跳（距右缘只剩 1px）—— 用户实测「起跳很晚、
+                              #        极大概率跳不上平台」就是这么来的。
+                              #      inset=5 → 跳跃区收成 **x 97~101（宽 5px）**，
+                              #        距平台左缘(92) / 右缘(106) **各留 5px** 余量。
+                              #        横段两端（x 94~96 → right、x 102~108 → left）
+                              #        会把角色**汇聚到中段**再起跳：
+                              #        实测落点 90~112 的起跳 x 全部落在 97~101，
+                              #        最偏的也距边缘 5px（1px/帧 和 2px/帧 两档都过）。
+                              #    ⚠️ 平台短时这个值是**决定性**的（本项目 15px 平台，
+                              #       inset 差 1px 就是"贴边跳"和"中间跳"的区别）；
+                              #       平台长时留 5px 余量同样安全，不用调回去。
+                              #    设 0 = 不内缩（贴边起跳，平台边缘容易踩空）。
+                              #    ⚠️ 平台特别窄、缩完 x0 > x1 时，calc_jump_band 会
+                              #       先把 inset 压到「至少留 3px 宽」；压完还是退化
+                              #       → 返回 None → 自动回落成老的"汇聚到拐角"行为。
+                              #    ⚠️ 填负数 / 不填 → 一律回落**默认 5**（不是 1：
+                              #       回落成 1 等于把"跳跃区铺满横段"这个坏值放回来）。
+
+  # 🎨 Color-coded(RGB) actions for route navigation
+  # "<left-right command, up-down command, action>"
+  color_code:
+    "255,0,0": "left none none"         # 🔴 Red
+    "0,0,255": "right none none"        # 🔵 Blue
+    "255,127,0": "left none jump"       # 🟠 Orange
+    "0,255,255": "right none jump"      # 🟦 Cyan
+    "127,255,0": "none down jump"       # 💚 Lime
+    "255,0,255": "none none jump"       # 💜 Magenta
+    "0,255,127": "stop stop stop"       # 🟢 Light green
+    "255,255,0": "none none goal"       # 🟨 Yellow
+    "255,0,127": "none up teleport"     # 🌸 Pink
+    "127,0,255": "none down teleport"   # 🟪 Purple
+    "0,127,0": "left none teleport"     # 🟩 Dark green
+    "139,69,19": "right none teleport"  # 🟫 Brown
+
+  # 🎨 Color-coded(RGB) actions for up and down
+  color_code_up_down:
+    "127,127,127": "none up none"       # ⚪ Gray
+    "255,255,127": "none down none"     # 🟡 Light yellow
+
+  # ⚠️ 第二版**没有**第三种色码表：第一版的 `color_code_home_anchor`
+  #    （127,0,127 落点锚）已随「落点锚」概念一起删除。
+  #    旧版 route_home.png 上残留的 127,0,127 像素，引擎每次开跑会自动涂黑
+  #    并打一行中文提示（见 src/utils/home_route.py 的 wipe_legacy_anchor）。
+  #    原因：该色不在上面两张表里 → 角色站上去时 get_nearest_color_code 取不到
+  #    → 那一帧没有指令 → 站着不动（不报错，极难查）。
+
+watchdog:
+  # 🐶 Watchdog
+  # This feature monitors your character's movement.
+  # If the player stays in the same spot for too long, the watchdog will "bark"
+  # and trigger a random action (defined in `color_code`) to help break the stuck state.
+  # The other feature is last attack watch dog. It check if the player doesn't attack for too long.
+  # If so, consider the player is stuck and perform recovery action 
+  range: 10            # 🥶 Movement threshold (in pixels). If the player moves less than this, it's considered stuck.
+  timeout: 10          # ⏱️ Time limit (in seconds). If the player stays still for this long, a random action is triggered.
+  on_stuck: alert      # 🚨 判定卡死后**做什么**（2026-09-15 用户定，见下）
+                       #
+                       #   random = 老行为：从 color_code 里**均匀抽**一个动作
+                       #            （`random.choice(["left","right","none"]) × ["down","none"] × ["jump","none"]`
+                       #            共 12 种，**完全不知道悬崖在哪**）。
+                       #            2026-09-15 用户实测判它"没有好处只有坏处"：
+                       #            ① 在窄平台上乱抽 = 直接掉下去（实测抽到 `right none jump`，
+                       #               而右边正好是悬崖）；
+                       #            ② 它把真因**盖住**了 —— 13:58 那次 `stuck 10.08s` 后随机跳，
+                       #               把角色从 (100,122) 踹到 (100,118)，症状从"在原地蹭"
+                       #               变成"跳到另一层"，日志上看"它动了"，反而更难查。
+                       #   alert  = ★ 默认：**不乱动**（保持本帧逻辑给的指令），
+                       #            改为**弹置顶提示窗** + 打醒目日志，让人来处理。
+                       #            代价：真卡住时不会自己脱困（但你会立刻知道）。
+                       #   none   = 什么都不做（只留 is_player_stuck 那条 WARNING）。
+                       #
+                       # ⚠️ 取值非法 / 缺键 → 一律回落 **alert**（最安全：宁可不动也别乱动）。
+                       # ⚠️ 为什么保留 random 这个选项：某些地形（比如掉进没录过回正线的坑）
+                       #    随机动一下是唯一的脱困希望 —— 换图时可以先试 random 对比。
+  alert_cooldown: 60   # 🔔 alert 模式下，两次弹窗的最短间隔（秒）。防"还卡着 → 每 10 秒弹一次"刷屏。
+                       #    注意：**弹窗没关之前不会再弹第二个**（模块内单实例），本值只防"关了又弹"。
+  attack_grace: 5      # ⚔️ 刚出过招的宽限秒数（2026-09-12 加）：这段时间内**不算卡死**。
+                       #    打怪时角色本来就不该动（技能前摇 + 冷却），连续打同一只怪的
+                       #    位移经常 < range(10px) → 没有这条就会被误判卡死、抽随机动作
+                       #    乱走，把正在进行的战斗打断。
+                       #    取值要 > 技能冷却（directional 0.9s / aoe 0.05s），
+                       #    又要 < timeout(10s) 以免真卡住了救不出来。
+                       #    ⚠️ 这是「删掉定点模式、全归巡逻」的前提之一 —— 原来靠
+                       #       「站安全点内豁免」兜住站桩打怪，那是 stand 模式专属的。
+  last_attack_timeout: 1200 # ⏳ Maximum time (in seconds) to not perform attack action
+                            #    超时后统一「按回城键 + 停止脚本」（换频道动作已移除）
+
+minimap:
+  # 🗺️ Mini-Map
+  # The minimap appears in the top-left corner of the game window.
+  # It is used to estimate the player’s current location in the world.
+  player_color: [136, 255, 255]   # 🟡 BGR value of the yellow player dot on the minimap
+  debug_window_upscale: 4         # 🔍 Zoom factor for the route debug image (for visualization only)
+  offset: [0, 0]                  # 📐 Don't set this unless playing on global server
+
+# 巡逻模式（patrol）已于 2026-09-10 移除：挂机要的是稳定，正式方案是「打怪 + 路线」，
+# 不再保留「不依赖识别、纯来回走」的兜底模式。
+
+route_recoder:
+  # 🎥 Route Recorder
+  # The route recorder is a standalone tool that helps generate `map.png` and `route*.png`.
+  # It records the player's movement and actions, then saves them as a route map image.
+  blob_cooldown: 0.7        # ⏱️ Cooldown in seconds between recording actions like 'jump' or 'teleport'
+                            #     These actions are marked as a "blob" on the route map
+  map_padding: 30           # 🖤 Padding (in pixels) added as margin around the edge of the map
+
+  # ── 手绘回正线（v0.9）—— 纯鼠标在放大的小地图上画，不用真的掉下去一次 ──────
+  home_draw_scale: 4        # 🔍 手绘画布默认放大倍数（268×187 → 1072×748）
+                            #    1 个原图像素 = 4 个屏幕像素，鼠标 ±1 屏幕像素 = ±0.25 原图像素
+  home_draw_scale_min: 3    # 🔍 滚轮下限 / 屏幕放不下时自动降级到的下限
+  home_draw_scale_max: 6    # 🔍 滚轮上限
+  home_draw_goal_radius: 1  # 🟨 手绘的终点（goal）盖章半径：1 = 5px
+                            #    ⚠️ 为什么不是录制器的 2（13px）：13px 的黄点会吃掉
+                            #       8px 短线的一大半，直接制造"一进回正就被判走完"的坑。
+                            #       老录制器流程仍是 2（不影响，回正退出已不看 goal）。
+                            # ⚠️ 第二版已删除 home_draw_anchor_radius（没有落点锚可盖）。
+
+game_window:
+  # 🪟 游戏窗口 —— 这里是**全部坐标的地基**，三个值都必须来自真机实测
+  #
+  # 采集方式：游戏开窗口模式（不要最大化、不要全屏）后跑
+  #   python -m tools.measure_window            # 量 + 核对
+  #   python -m tools.measure_window --write-config   # 按实测值直接改本文件
+  #
+  # 实测结论（2026-09-10，用 tools/measure_window.py + 已知尺寸对照窗口验证）：
+  #   抓「窗口」得到的帧**含标题栏和 1px 窗口边框**，不是纯客户区：
+  #     帧宽 = 客户区宽 + 2      （左右各 1px）
+  #     帧高 = 客户区高 + 标题栏高 + 1（底部 1px）
+  #   100% 缩放时标题栏实测 31px（上游写死 32，偏 1px）；换缩放比例要重量。
+  #   引擎 get_img_frame() 先切掉 title_bar_height 行，再锚定左上角裁到 size，
+  #   正好落在客户区上 —— 帧的像素坐标 == 客户区坐标。
+  title: "冒险岛怀旧服"          # 🎮 窗口标题关键词（找窗口用；会排除资源管理器/桌面等外壳窗口）
+  size: [768, 1366]             # 📐 客户区尺寸 [高, 宽]（不含标题栏）✅ 2026-09-10 真机实测一致
+  coord_base_size: ~            # 📐 ui_coords 是在哪个尺寸下录的 [高, 宽]；~ = 同 size（推荐）
+  title_bar_height: 31          # 📐 抓帧顶部要切掉的标题栏高度（实测值；随系统缩放变化）
+
+log:
+  # 📝 日志埋点开关（排查用，随时可关）
+  # ⚠️ 只影响"打不打日志"，**不影响任何判定逻辑** —— 关掉不会改变机器人行为。
+  # ⚠️ 缺段 / 缺键 / 填了非布尔值 → 一律**默认开**（照 _edge_guard_step 的读法，
+  #    不进 home_params / _HOME_PARAM_FLOORS，避免"想关关不掉"）。
+  jump_trace: true       # 🔍 回正起跳埋点：进回正记起点、走到起跳点记一次、退出时打一行小结
+  perf_trace: true       # ⏱️ 主循环性能埋点：每 5 秒一行，各阶段耗时降序（排查"帧率上不去"用）
+
+system:
+  # ⚙️ System Settings
+  # Controls performance and behavior of core system threads.
+  # ⚠️★ 2026-09-13 用户实测改（这条比前面几处逻辑修复都关键，别改回去）
+  #   用户反馈：「明明角色到地方了还要等一会才能发送按键指令」——他是对的。
+  #   原来主循环只有 10 FPS = **每 100ms 才决策一次**。角色实测约 44px/s，
+  #   也就是从「走到终点」到「发出掉头指令」之间，角色已经又走过 **4.4px**，
+  #   而平台只有 14px 宽、端点内缩后缓冲只剩几个像素 → 必然冲出边缘掉下去。
+  #   这就是「改了逻辑却看不出效果」的原因：控制周期太粗，修复全被延迟淹没。
+  #   提到 30 FPS 后每次决策只走 ~1.5px。
+  #   ✅ 安全性：键盘是**按住**模式（key_down / key_up），提帧只会让掉头更及时，
+  #      **不会**让角色走得更快。
+  #   💡 CPU 吃紧就往下调，但别低于 20（低于 20 每次决策又要走 2px 以上）。
+  fps_limit_main: 30                # 🚥 Main loop FPS – 主循环多快决策一次
+  fps_limit_keyboard_controller: 30 # 🚥 Keyboard controller thread FPS
+  # ⚠️ 截图是主循环的**上游**：15 FPS = 每 66ms 才刷新一次画面，主循环再快
+  #    拿到的也是过期坐标。所以这里要跟着一起提。
+  fps_limit_window_capturor: 30     # 🚥 Window capture thread FPS
+  fps_limit_route_recorder: 10      # 🚥 Route recorder FPS
+  language: "cn"                    # ⚙️ Options: "eng" "cn"

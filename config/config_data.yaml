@@ -1,0 +1,21 @@
+# 地图 / 怪物登记表
+#
+# 每做一张地图、截好一种怪，在这里登记一行。
+# 界面上录完路线 / 截完怪会自动写这里，也可以手动改。
+#
+# eng_to_cn:       英文ID -> 中文显示名（界面下拉显示 "henesys_west (勇士村西入口)"）
+# map_mobs_mapping: 地图ID -> [怪物ID, ...]
+#
+# ⚠️ 地图ID 必须与 minimaps/<地图ID>/ 的目录名严格一致，
+#    怪物ID 必须与 monster/<怪物ID>/ 的目录名严格一致。
+#
+# 出厂为空表 —— 模板需要你从本服真机截图自己做（上游台服模板不通用）。
+# 手动登记示例：
+#   eng_to_cn:
+#     green_mushroom: 绿蘑菇
+#   map_mobs_mapping:
+#     你的地图ID: [green_mushroom]
+
+eng_to_cn: {}
+
+map_mobs_mapping: {}
