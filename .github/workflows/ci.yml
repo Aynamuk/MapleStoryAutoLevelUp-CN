@@ -1,0 +1,72 @@
+name: CI
+
+# 只在改动代码/资源时触发；纯文档改动不必跑
+on:
+  push:
+    branches: [ master ]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:      # 允许在 Actions 页面手动点一次
+
+# 为什么用 windows-latest 而不是默认的 ubuntu：
+#   本项目是 Windows 专属，src/utils/common.py 与 src/input/GameWindowCapturor.py
+#   在**模块顶层**就 import 了 pywin32 / windows-capture，这些包在 Linux 上装不上，
+#   任何 import 到 src 的脚本都会 ModuleNotFoundError。
+#   GitHub 对公开仓库的 Windows runner 同样免费。
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 语法检查（全部源码与工具）
+        run: python -m compileall -q src tools
+
+      # 只跑「不依赖游戏窗口、不抓帧、不发按键」的离线自检。
+      # 其余 verify_*.py 需要真实窗口/资源或会阻塞（input()），故不进 CI：
+      #   verify_route            需要 tools.grab_frame 抓帧
+      #   verify_home_route_health 需要真实资源跑 load_config
+      #   verify_nametag_track     需要真机日志，且末尾有 input() 阻塞
+      - name: 离线自检
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PYTHONUTF8 = '1'
+          $tests = @(
+            'verify_home_route',
+            'verify_recorder_action',
+            'verify_home_restore',
+            'verify_jump_cooldown',
+            'verify_mob_template_qa'
+          )
+          $failed = @()
+          foreach ($t in $tests) {
+            Write-Host "===== $t ====="
+            python -m "tools.$t"
+            if ($LASTEXITCODE -ne 0) { $failed += $t }
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host ""
+            Write-Host "失败的自检：$($failed -join ', ')"
+            exit 1
+          }
+          Write-Host ""
+          Write-Host "全部离线自检通过（$($tests.Count) 项）"
