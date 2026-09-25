@@ -2,8 +2,22 @@
 
 基于计算机视觉的冒险岛怀旧服（国服）自动练级脚本。不读取游戏内存，只截取游戏窗口画面、识别怪物与角色位置，再模拟键盘操作控制角色。
 
+> 📦 **不想装 Python？** 直接下载免安装版（Windows 64 位，解压即用）：
+> **[⬇ MapleStoryAutoLevelUp-CN v1.0](../../releases/latest)**
+>
+> 免安装包是 PyInstaller 打包的 `--onedir` 目录，**必须整个文件夹解压后使用**，不要只拿 exe。
+
 > 本项目是 [MapleStoryAutoLevelUp](https://github.com/kenyu910645/MapleStoryAutoLevelUp)（台服 Artale 版，MIT）的**国服怀旧服 fork**。
 > 国服客户端是 Unity 重制版，与台服差异较大，本 fork 做了针对性改造，详见下文「与上游的差异」。
+
+## 两种使用方式
+
+| 方式 | 适合谁 | 怎么做 |
+|---|---|---|
+| **免安装包** | 只想用，不想碰代码 | 去 [Releases](../../releases/latest) 下载 zip，解压后双击 `冒险岛自动练级.exe` |
+| **源码运行** | 想改代码 / 自己打包 | 见下文「环境要求」与「开发者：源码运行」 |
+
+> 仓库本身**只放源码**，不放 exe —— PyInstaller 的成品有 250MB，超过 GitHub 单文件 100MB 硬限，且二进制进 git 历史会让仓库迅速膨胀。成品一律走 Release 附件。
 
 ## 与上游的差异
 
