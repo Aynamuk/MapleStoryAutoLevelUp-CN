@@ -147,14 +147,26 @@ rb = new_recorder("c")
 rb.loc_player_global = (30, 30)
 rb.paint_step("none none jump", True)
 _t0 = rb.t_last_draw_blob
+_pix_after_first = dict(rb._blob_pixels)     # 第一次画完后记下的像素
 rb.loc_player_global = (30, 30)
 rb.paint_step("none none jump", True)      # 冷却未过 → 不画
 check("冷却内连按 → t_last_draw_blob 不变（没重复画）",
       rb.t_last_draw_blob, _t0)
+check("冷却内连按 → 记下的像素集合也没变",
+      dict(rb._blob_pixels), _pix_after_first)
 rb.t_last_draw_blob = time.time() - 999    # 手动让冷却过期
 rb.loc_player_global = (50, 30)
 rb.paint_step("none none jump", True)
-check("冷却过后 → 会再画一次", rb.t_last_draw_blob > _t0, True)
+# ⚠️ 2026-09-25 修：原断言是 `rb.t_last_draw_blob > _t0`，比较两次 time.time()。
+#    但 Windows 系统时钟精度约 15.6ms（实测 2000 次连续调用有 1429 次拿到**完全相同**
+#    的值），CI 慢机器上两次调用极易落在同一刻度 ⇒ `>` 不成立 ⇒ **假红**
+#    （GitHub Actions windows-latest 实测失败：got=False want=True）。
+#    时间戳本身不是被测语义，**"冷却过后确实又画了一个圆点"** 才是 —— 改成断言
+#    新位置被记进 _blob_pixels（(50,30) 是第二次才用的坐标，冷却没过时不该出现）。
+check("冷却过后 → 会再画一次（新位置进了 blob 像素表）",
+      (50, 30) in rb._blob_pixels, True)
+check("冷却过后 → 原位置仍在（不是清空重画）",
+      (30, 30) in rb._blob_pixels, True)
 
 print("\n【5】★ 跳跃必须**边沿触发**：10fps 轮询会漏掉轻按的跳（2026-09-17 修 bug ③）")
 # ══════════════════════════════════════════════════════════════════════
