@@ -170,6 +170,21 @@ monster_detect:
   # 💡 Feel free to test different modes to find what works best for your setup.
   mode: "contour_only"         # 🧠 Options: "color" "grayscale" "contour_only"
   diff_thres: 0.8              # 📏 Diff threshold for template matching, [0.0 ~ 1.0] Lower = stricter match
+  #   ⚠️ 方向一定要记准：本值是「**差异**阈值」，引擎判定式是 `差异 <= 阈值` 才算命中
+  #      （见 engine 里 np.where(res <= diff_thres) 那三处）——
+  #      **调小 = 更严格**（只认"非常像"的：漏检多、误报少）
+  #      **调大 = 更宽松**（连"有点像"也认：误报多、漏检少）
+  #
+  #      本文件这里是**上游原值 0.8**，偏松；国服画面上实测误报偏多。
+  #      项目实际生效的值由 config_custom.yaml 覆盖为 **0.4**（见该文件的说明）。
+  #      也就是说：**删掉 config_custom.yaml 就会退回 0.8、变成满屏误报**。
+  #
+  #      💡 换模板后若发现偏宽/偏严，用 `python -m tools.mob_template_qa` 重新测一遍
+  #         模板之间的相似度，再决定这个值往哪边调。
+  #      💡 想临时试不同值：`python -m tools.verify_monster --thres 0.3`（不改配置）。
+  #
+  #      ⚠️ 别和 nametag.diff_thres(=0.01) 搞混：那个是"角色名标签定位"，
+  #         UI 元素固定不变、要求极高精度；怪物姿态多变，本来就该宽松得多。
   search_box_margin: 50        # ➕ Additional margin(in pixels) around the attack box for monster searching
   contour_blur: 5              # 🌫️ Gaussian blur kernel size used for contour smoothing (in "contour_only" mode).
   with_enemy_hp_bar: False     # ❤️ 用怪物血条辅助检测。国服挂机打的是秒杀怪，血条不会出现，默认关闭；以后打精英/BOSS 可再开。
