@@ -29,16 +29,17 @@ debug/
 config/*.yaml
 !config/config_default.yaml
 !config/config_custom.yaml
-!config/config_data.yaml
 !config/config_data.blank.yaml
+
+# config_data.yaml 出厂是空表，但**录完地图/截完怪后会自动写入**（含你的地图名
+# 与怪物名 ⇒ 暴露挂机点位），所以默认忽略。公开版仓库里保留的是出厂空表那一版。
+config/config_data.yaml
 
 # 角色名标签模板（文件名就是角色名）
 nametag/*.png
 nametag/*.jpg
 
-# 个人录制的路线与截图（地图目录名可能暴露挂机点位）
-# minimaps/ 与 monster/ 出厂只有 .gitkeep；如果你要公开自己做的
-# 通用模板，请手动 git add -f 明确指定文件，不要整体放开。
+# 个人录制的路线与模板（会暴露挂机点位/怪物分布，默认不公开）
 
 # 内部工作流文档（架构/PRD 设计稿）：含本机路径与内部角色分工，不属于对外资料
 docs/design_*.md
@@ -51,4 +52,9 @@ HANDOFF.md
 # 发布产物（zip 走 Release 附件，不进仓库）
 *.zip
 RELEASE_NOTES_*.md
+
+minimaps/*
+!minimaps/.gitkeep
+monster/*
+!monster/.gitkeep
 
