@@ -54,6 +54,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from src.utils.common import load_yaml, imread_unicode, imwrite_unicode  # noqa: E402
+from src.utils.console import require_console, wait_enter_or_skip  # noqa: E402
 from src.utils.mob_template_qa import (  # noqa: E402
     DUP_THRES_DEFAULT, load_masks, old_hits_frame, template_paths,
 )
@@ -267,11 +268,11 @@ def switch_mob_name(current):
         print(f"    {i} = {m} {mark}")
     print("    n = 新怪物（输入新名字）")
     while True:
-        k = input("  输入编号或 n 后回车（直接回车 = 不变）: ").strip()
+        k = require_console("  输入编号或 n 后回车（直接回车 = 不变）: ")
         if not k:
             return current
         if k.lower() == "n":
-            new = input("  新怪物的名字（中文名就可以）: ").strip()
+            new = require_console("  新怪物的名字（中文名就可以）: ")
             if new:
                 return new
             print("  名字不能为空。")
@@ -485,7 +486,9 @@ def ask_interactively(kind, name):
     kind = "monster"
     print("  提示：名称请填这种怪的名字（中文名就可以，如：绿蘑菇）。")
     while not name:
-        name = input("  请输入怪物的名字后回车: ").strip()
+        # 2026-09-26：无控制台时 require_console 抛可读错误，而不是让 input()
+        # 静默 EOF 崩掉（界面调用时永远带 --name，正常够不到这里）。
+        name = require_console("  请输入怪物的名字后回车: ")
         if not name:
             print("  名称不能为空，请重新输入。")
     return kind, name
@@ -627,8 +630,9 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         code = 1
-    try:
-        input("\n[结束] 按回车关闭窗口 ")
-    except Exception:
-        pass
+    # 2026-09-26：改走公共防御 —— 没控制台就跳过，别让工具崩在最后一步。
+    # （旧写法是裸 input() 包 try/except：本机够用，但 input() 在无控制台时
+    #   会立刻 EOF，这个「等回车」的意图根本没实现，还平白吞掉异常；
+    #   见 src/utils/console.py 顶部「没有控制台」小节的说明。）
+    wait_enter_or_skip()
     sys.exit(code)

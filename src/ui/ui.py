@@ -712,6 +712,31 @@ class MainWindow(QMainWindow):
         # Load previous stored UI state
         self.load_ui_state()
 
+        # ⚠️⚠️ 2026-09-26 关键修复：启动时必须把配置**填进界面控件**，否则自动保存
+        #       会把空控件当成用户设置、写出「按键全空」的配置。
+        #
+        #   【曾经的 bug】__init__ 里从不调 apply_config_to_ui，控件创建出来一直是空的；
+        #   而下面的 _autosave_timer 每 3 秒 tick 一次 → _flush_settings →
+        #   update_cfg_from_main_ui → 无条件执行
+        #       self.cfg["key"]["jump"] = self.jump_key.get_key()   # 空控件 → ''
+        #   于是 self.cfg 被写空，get_cfg_diff(默认值, 被写空的 cfg) 算出「几个空值」
+        #   这个差异，落盘成 config_custom.yaml：
+        #       key: {aoe_skill: '', jump: '', return_home: '', teleport: ''}
+        #
+        #   【危害】静默。用户什么都没做，只是「打开界面等 3 秒」，配置就被写坏，
+        #   症状是「按键不工作」，且没有任何报错。2026-09-26 实测复现：
+        #   全新环境（无任何自定义方案）打开界面 10 秒，config_custom.yaml 自动生成
+        #   且内容为上述空值；源码运行与打包运行**都会中招**。
+        #
+        #   【为什么以前没发现】本地存在自定义方案文件，某些路径（load_config 等）
+        #   曾把控件填上值，掩盖了这个问题；任何"干净环境首次启动"（＝每个新用户）
+        #   必然踩到。
+        #
+        #   【为什么放在这里】必须在 load_ui_state() 之后 —— 它可能恢复"上次用的方案"
+        #   并据此改 self.cfg，先填控件就会填成过期的值；又必须在启动定时器之前，
+        #   否则定时器仍可能抢在填值前跑一次。
+        self.apply_config_to_ui()
+
         # 配置方案：填充下拉列表 + 自动保存定时器（3 秒去抖，设置有变化才写盘）
         self._refresh_config_combo()
         self._autosave_timer = QTimer(self)
@@ -907,7 +932,16 @@ class MainWindow(QMainWindow):
     # 资源制作三连（标定名字 / 截怪物模板 / 录路线）在主界面 F2/F3/F4。
     # 各工具以独立控制台窗口运行（有自己的交互/输出），复用 tools/ 现有实现。
     # ------------------------------------------------------------------
-    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # ⚠️ 2026-09-26：`_REPO_ROOT` 已废弃，**不要再用**。
+    #    旧定义是「从本文件往上退三层」＝只对源码模式成立；打包后 __file__ 位于
+    #    exe 旁边的 _internal/ 里，退三层会算成 _internal/ 本身 ⇒ 资源全部找不到
+    #    （症状：点 F3 报 FileNotFoundError: ...\_internal\monster）。
+    #    一律改用 src.utils.paths.APP_ROOT（打包＝exe 所在目录，源码＝仓库根）。
+    #    下面的 property 会在被访问时立刻抛错，防止有人再写出静默算错的代码。
+    @property
+    def _REPO_ROOT(self):
+        raise RuntimeError(
+            "_REPO_ROOT 已废弃（打包后算错）。请改用 src.utils.paths.APP_ROOT。")
 
     def _is_admin(self):
         try:
@@ -1006,17 +1040,20 @@ class MainWindow(QMainWindow):
         # ------------------------------------------------------------------
         gbox_guide = QGroupBox("换一张新图挂机 —— 照着做 5 步")
         glay = QVBoxLayout(gbox_guide)
+        # ⚠️ 2026-09-26 重排步骤顺序（旧版把 F3 截怪放在 F4 录路线之前 —— **错的**）。
+        #    原因：F3 在代码里有硬前置 `if not self.selected_map: return`（见
+        #    launch_template_capture），必须先选中地图才能截怪；而地图是 F4 录路线
+        #    时才创建并登记到 config_data.yaml 的。出厂 config_data.yaml 是空表
+        #    （eng_to_cn: {} / map_mobs_mapping: {}），所以新用户照旧顺序做，会在
+        #    第 ② 步撞上「请先选地图」且列表全空 —— 卡死且不知道去哪弄地图。
+        #    ⇒ 正确顺序：标名字 → 录路线(产生地图) → 选地图 → 截怪 → 开始。
         guide = QLabel(
             "<b>① F2 标定名字</b>　<font color=gray>只有换角色才要做</font><br>"
             "　框住游戏画面里角色的名字行，再点一下角色中心。不标的话角色定位会失效。<br><br>"
 
-            "<b>② F3 截怪物模板</b>　<font color=gray>换图才做</font><br>"
-            "　框住一只怪自动抠图；同一只怪换个朝向再截 1~2 帧更稳。<br>"
-            "　<b>以前截过的怪直接复用</b> —— 主界面选中地图 →「🐾 打哪几种怪」勾上就行，"
-            "不用重截。<br><br>"
-
-            "<b>③ F4 录挂机路线</b>　<font color=gray>要管理员运行本程序，"
+            "<b>② F4 录挂机路线</b>　<font color=gray>要管理员运行本程序，"
             "否则收不到游戏里的按键</font><br>"
+            "　<b>这一步会创建地图</b> —— 新图必须先录路线，地图列表里才会有它。<br>"
             "　弹出来的录制面板，<b>全程用鼠标点按钮</b>就够了：<br>"
             "　· 站到想当起点的位置 → 点【开始录（我站好了）】<br>"
             "　· 一路走到平台另一头 → 点【在这折返，存下这段】<br>"
@@ -1025,19 +1062,31 @@ class MainWindow(QMainWindow):
             "　⚠️ <b>去程和回程必须分成两段</b>：挤在同一段的话，同一个位置既有向左"
             "又有向右的路线像素，角色会一路冲出平台。<br><br>"
 
-            "<b>④ 🖊 手绘回正线</b>　<font color=gray>「掉下去能自己走回来」的关键，"
+            "<b>③ 选地图</b><br>"
+            "　录完路线关闭界面、重新打开，地图就会出现在下方列表里 —— 点选它。"
+            "（路线会自动登记，不用手动加。）<br><br>"
+
+            "<b>④ F3 截怪物模板</b>　<font color=gray>换图才做，"
+            "且必须在选好地图之后</font><br>"
+            "　框住一只怪自动抠图；同一只怪换个朝向再截 1~2 帧更稳。<br>"
+            "　<b>以前截过的怪直接复用</b> —— 主界面选中地图 →「🐾 打哪几种怪」勾上就行，"
+            "不用重截。<br><br>"
+
+            "<b>⑤ ▶ 开始 (F1)</b>　<font color=gray>建议先画回正线再挂机</font><br>"
+            "　路线和怪物都会<b>自动登记</b>。<br><br>"
+
+            "<b>🖊 手绘回正线</b>　<font color=gray>「掉下去能自己走回来」的关键，"
             "强烈建议做</font><br>"
-            "　回正线 = 掉出平台后怎么走回主线。<br>"
+            "　回正线 = 掉出平台后怎么走回主线。选好地图后随时可做。<br>"
             "　推荐：主界面选中地图 → 点【🖊 手绘回正线】—— <b>不用开游戏、"
             "不用真的掉一次</b>，在小地图上先点落点、再点回到主线的路就行。<br>"
             "　也可以在录制时现场录：【录回正线】→ 自己走到坑里 →【我在落地点】"
             "→ 走回主线 →【已回到主线】。<br>"
             "　一张图可以有好几条 —— 有几个会掉的坑就画几条。<br><br>"
 
-            "<b>⑤ 选图 → ▶ 开始 (F1)</b><br>"
-            "　路线和怪物都会<b>自动登记</b>，录完重启界面就能在地图列表里选到。<br><br>"
-
             "<b>出问题怎么办</b><br>"
+            "· <b>按 F2/F3/F4 没反应</b>：多半是没以管理员身份运行 —— 关掉程序，"
+            "右键「启动界面.bat」→ 以管理员身份运行。<br>"
             "· <b>掉下去回不来</b>：多半是没画回正线，或落点画错了 —— "
             "用【🖊 手绘回正线】补一条。<br>"
             "· <b>挂机变卡 / 帧率低</b>：下面「模板查重」看一眼，删掉重复的模板是"
@@ -1122,7 +1171,7 @@ class MainWindow(QMainWindow):
                 if files:
                     # 统一成相对路径 —— path_cfg_custom 在别处都是相对的（含 __init__ 默认值
                     # 与状态文件里存的值），一处绝对一处相对会让显示/比较出现"看着不一样"的假象
-                    last = os.path.relpath(files[0], self._REPO_ROOT)
+                    last = os.path.relpath(files[0], APP_ROOT)
                     logger.warning(f"[UI] 上次的配置方案已不存在：{state.get('last_config_path')}；"
                                    f"自动改用 {os.path.basename(last)}")
                 else:
@@ -1595,7 +1644,7 @@ class MainWindow(QMainWindow):
         下划线开头的临时备份文件）。"""
         import glob
         out = []
-        for f in sorted(glob.glob(os.path.join(self._REPO_ROOT, 'config', '*.yaml'))):
+        for f in sorted(glob.glob(os.path.join(APP_ROOT, 'config', '*.yaml'))):
             base = os.path.basename(f)
             if base in ('config_default.yaml', 'config_data.yaml', '.config_tmp.yaml'):
                 continue
@@ -2177,7 +2226,7 @@ class MainWindow(QMainWindow):
 
         # 已有模板库非空 → 给一条"不用重截"的捷径（用户 2026-09-12：
         # 「之前不是说录好一次的怪所有图都通用么」，指的就是这条路没做）
-        monster_root = os.path.join(self._REPO_ROOT, "monster")
+        monster_root = os.path.join(APP_ROOT, "monster")
         btn_pick = None
         if os.path.isdir(monster_root) and any(
                 os.path.isdir(os.path.join(monster_root, d))
@@ -2250,12 +2299,31 @@ class MainWindow(QMainWindow):
         # 必须先选地图：怪物模板保存时自动登记到该图的打怪列表（--map 静默传入，
         # 框选过程中零打断 —— 控制台问询曾导致窗口卡死，2026-09-12 用户实测）
         if not getattr(self, 'selected_map', None):
-            QMessageBox.information(self, "先选地图",
-                                    "请先在下方地图列表里点选要挂机的地图，再截怪物模板。")
+            # 2026-09-26 改：旧提示只说「请先选地图」。对新用户来说地图列表是**空的**
+            # （出厂 config_data.yaml 是空表，地图要靠 F4 录路线才产生），
+            # 他只会在列表里找不到东西、然后卡住 —— 所以这里要分两种人说：
+            # 列表非空 = 忘了点选；列表为空 = 先去录一条路线。
+            maps = [self.list_widget_maps.item(i).text()
+                    for i in range(self.list_widget_maps.count())]
+            if maps:
+                QMessageBox.information(
+                    self, "先选地图",
+                    "请先在下方地图列表里点选要挂机的地图，再截怪物模板。\n\n"
+                    f"当前可选：{('、'.join(maps[:8]))}{' …' if len(maps) > 8 else ''}")
+            else:
+                QMessageBox.information(
+                    self, "还没有任何地图 —— 请先录一条路线",
+                    "截怪物模板时必须知道「这只怪属于哪张图」，所以要先有地图。\n\n"
+                    "而你还没有任何地图。地图是在**录挂机路线**时自动创建的：\n\n"
+                    "　1. 确认本程序是「以管理员身份运行」（否则收不到游戏里的按键）\n"
+                    "　2. 回到主界面按 F4（或点「录路线」），在游戏里走一遍挂机路线并保存\n"
+                    "　3. 关闭界面重新打开 —— 刚录的图就会出现在下方地图列表里\n"
+                    "　4. 点选它，再回来按 F3 截怪\n\n"
+                    "（详细步骤见上方「换一张新图挂机 —— 照着做 5 步」。）")
             return
         # 可编辑下拉：monster/ 里已截过的怪直接选（历史怪物库），也可输入新名字
-        mobs = sorted((d for d in os.listdir(os.path.join(self._REPO_ROOT, "monster"))
-                       if os.path.isdir(os.path.join(self._REPO_ROOT, "monster", d))),
+        mobs = sorted((d for d in os.listdir(os.path.join(APP_ROOT, "monster"))
+                       if os.path.isdir(os.path.join(APP_ROOT, "monster", d))),
                       key=str.lower)
         name, ok = QInputDialog.getItem(
             self, "截取怪物模板",
@@ -2282,7 +2350,7 @@ class MainWindow(QMainWindow):
                                     "请先在地图列表里点选要挂机的地图。")
             return
 
-        monster_root = os.path.join(self._REPO_ROOT, "monster")
+        monster_root = os.path.join(APP_ROOT, "monster")
         available = sorted((d for d in os.listdir(monster_root)
                             if os.path.isdir(os.path.join(monster_root, d))),
                            key=str.lower) if os.path.isdir(monster_root) else []
@@ -2814,16 +2882,31 @@ class MainWindow(QMainWindow):
             return old
 
         # Attack setting gbox
+        # 【2026-09-26 兜底】`_key()`：控件读出来是空、而配置里原本有值时，保留原值。
+        #   与上面 _num() 同一个思路（数值解析失败保留原值），专门防"控件还没被
+        #   apply_config_to_ui 填过值就被自动保存读走"这一类问题。
+        #   注意：用户**故意**清空某个按键（想禁用瞬移等）时，cfg 里原本也是空，
+        #   此时原值为空、保留结果仍为空 ⇒ 不影响"故意清空"的正常用法。
+        def _key(widget, old):
+            v = widget.get_key()
+            if not v:
+                if old:
+                    logger.warning(f"[界面] 按键控件为空，保留原值 {old!r}（疑似控件未初始化）")
+                return old
+            return v
+
         if self.attack_mode.currentText() == "基础攻击":
             self.cfg["bot"]["attack"] = "directional"
-            self.cfg["key"]["directional_attack"] = self.basic_attack_key.get_key()
+            self.cfg["key"]["directional_attack"] = _key(
+                self.basic_attack_key, self.cfg["key"].get("directional_attack"))
             da = self.cfg["directional_attack"]
             da["range_x"] = _num(self.attack_range_x.text(), da["range_x"], int)
             da["range_y"] = _num(self.attack_range_y.text(), da["range_y"], int)
             da["cooldown"] = _num(self.attack_cooldown.text(), da["cooldown"], float)
         elif self.attack_mode.currentText() == "AOE技能":
             self.cfg["bot"]["attack"] = "aoe_skill"
-            self.cfg["key"]["aoe_skill"] = self.basic_attack_key.get_key()
+            self.cfg["key"]["aoe_skill"] = _key(
+                self.basic_attack_key, self.cfg["key"].get("aoe_skill"))
             ao = self.cfg["aoe_skill"]
             ao["range_x"] = _num(self.attack_range_x.text(), ao["range_x"], int)
             ao["range_y"] = _num(self.attack_range_y.text(), ao["range_y"], int)
@@ -2831,10 +2914,14 @@ class MainWindow(QMainWindow):
         else:
             logger.error(f"[update_cfg_from_main_ui] Unsupported attack mode: {self.cfg['bot']['attack']}")
         # Key binding gbox
-        self.cfg["key"]["teleport"] = self.teleport_key.get_key()
-        self.cfg["key"]["aoe_skill"] = self.aoe_skill_key.get_key()
-        self.cfg["key"]["jump"] = self.jump_key.get_key()
-        self.cfg["key"]["return_home"] = self.return_home_key.get_key()
+        self.cfg["key"]["teleport"] = _key(
+            self.teleport_key, self.cfg["key"].get("teleport"))
+        self.cfg["key"]["aoe_skill"] = _key(
+            self.aoe_skill_key, self.cfg["key"].get("aoe_skill"))
+        self.cfg["key"]["jump"] = _key(
+            self.jump_key, self.cfg["key"].get("jump"))
+        self.cfg["key"]["return_home"] = _key(
+            self.return_home_key, self.cfg["key"].get("return_home"))
         # Buff skills
         if not self.checkbox_enable_buff.isChecked():
             self.cfg["buff_skill"]["keys"] = []

@@ -1,4 +1,4 @@
-# 构建产物
+﻿# 构建产物
 build/
 build_user/
 build_dev/
@@ -39,3 +39,11 @@ nametag/*.jpg
 # 个人录制的路线与截图（地图目录名可能暴露挂机点位）
 # minimaps/ 与 monster/ 出厂只有 .gitkeep；如果你要公开自己做的
 # 通用模板，请手动 git add -f 明确指定文件，不要整体放开。
+
+# 内部工作流文档（架构/PRD 设计稿）：含本机路径与内部角色分工，不属于对外资料
+docs/design_*.md
+docs/design_*.mermaid
+docs/prd_*.md
+docs/debug-log/
+HANDOFF.md
+
