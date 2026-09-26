@@ -1068,7 +1068,12 @@ class MainWindow(QMainWindow):
 
             "<b>④ F3 截怪物模板</b>　<font color=gray>换图才做，"
             "且必须在选好地图之后</font><br>"
-            "　框住一只怪自动抠图；同一只怪换个朝向再截 1~2 帧更稳。<br>"
+            "　框住一只怪自动抠图。<b>一只怪通常 2 个模板就够</b> —— 挑姿态差别大的"
+            "两种截（比如站立 / 攻击），<b>相似的就别重复截了</b>。<br>"
+            "　· 游戏是横版，怪只有左右两个朝向，而引擎会<b>自动把每张模板左右镜像</b>，"
+            "所以一张顶两张用，不用自己截反面。<br>"
+            "　· 感觉<b>识别不稳</b>（漏怪 / 打空）就多截几个姿态；<br>"
+            "　· 感觉<b>帧率变低</b>（模板越多每帧匹配越慢）就去下面「模板查重」清一遍。<br>"
             "　<b>以前截过的怪直接复用</b> —— 主界面选中地图 →「🐾 打哪几种怪」勾上就行，"
             "不用重截。<br><br>"
 
@@ -1116,10 +1121,20 @@ class MainWindow(QMainWindow):
         # 引擎对**每张** PNG 都会生成「原图 + 左右镜像」两个模板，所以
         # 每次怪检测的匹配次数 = 张数 × 2 —— 多一张模板就是每次检测多跑两次
         # 全 ROI 的 matchTemplate。而"多出来的"往往只是同一个姿势重截了一遍。
-        gbox_tpl = QGroupBox("模板体检（模板越多怪检测越慢，这里查有没有重复的）")
+        gbox_tpl = QGroupBox("模板体检（挂机卡了/识别不稳时可查）")
         tpl_layout = QVBoxLayout(gbox_tpl)
+        # 2026-09-26 补说明：原先只说「多得会变慢」，没讲清「一张顶两张」这个
+        # 关键前提，用户容易重复截同一个姿态（纯浪费，还拖慢每帧检测）。
+        tpl_tip = QLabel(
+            "<font color=gray>"
+            "引擎加载每张模板时会<b>自动左右镜像</b>，所以每张实际参与 <b>2 次</b>匹配"
+            "（怪朝左朝右都能认）。一只怪一般 <b>2 个姿态差异较大的模板</b>就够了；"
+            "感觉识别不稳就多截几个，感觉卡顿就去下面清一遍重复的。"
+            "</font>")
+        tpl_tip.setWordWrap(True)
+        tpl_layout.addWidget(tpl_tip)
         btn_tpl = QPushButton(
-            "模板查重 —— 列出互相重复的模板（只报告，不删，删哪张你定）")
+            "模板查重 —— 列出相似度过高的模板（只报告不删，删哪张你定）")
         btn_tpl.clicked.connect(self._launch_mob_template_qa)
         tpl_layout.addWidget(btn_tpl)
         layout.addWidget(gbox_tpl)
