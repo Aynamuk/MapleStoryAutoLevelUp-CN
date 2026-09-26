@@ -47,3 +47,8 @@ docs/prd_*.md
 docs/debug-log/
 HANDOFF.md
 
+
+# 发布产物（zip 走 Release 附件，不进仓库）
+*.zip
+RELEASE_NOTES_*.md
+
