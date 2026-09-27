@@ -1318,6 +1318,16 @@ class MapleStoryAutoBot:
             by_min = max(0, cy - radius)
             by_max = min(h, cy + radius)
             n, n_ud, md, md_ud = None, None, float('inf'), float('inf')
+            # ⚠️★ 2026-09-27 **撤回一次错误改动，别再加回来**：
+            #   曾在此处加过「上下码里 up 优先于 down」（理由是那两段梯子像素
+            #   x=178(up) / x=180(down) 差 2px、y 重叠）。**那个理由是错的** ——
+            #   引擎每帧只加载**当前那一段**（`self.img_route = self.img_routes[idx]`，
+            #   见 run_once），两段的像素**永远不会同时进入本扫描**，
+            #   所以"两个上下码打架"这个前提根本不存在。
+            #   真机症状「爬到一半开始往下爬」的真因是：**爬到一半就切段了**，
+            #   切到回程段(route2) 后那段在梯子上写的是 down ⇒ 于是往下爬。
+            #   ⇒ 要治的是**切段时机**（见 _near_seg_goal 的 goal_reach_y_tol），
+            #     不是这里的取舍。别再往这里加优先规则。
             for y in range(by_min, by_max):
                 for x in range(bx_min, bx_max):
                     pixel = tuple(self.img_route[y, x])  # (R, G, B)
@@ -2823,8 +2833,49 @@ class MapleStoryAutoBot:
             else:
                 self._seg_goals.append(None)
             # 主方向：数一下这段里 left / right 像素哪个多
+            # ── 主方向：数一下这段里 left / right 像素哪个多 ──────────────
+            #
+            # ⚠️★ 2026-09-28 改口径：**只看 goal 附近的像素**，不再统计全段
+            #
+            #   为什么必须改（真机现场，用户 minimaps/废都南方工地，2026-09-28 00:26）：
+            #     用户的路线是 **L 形**（不是直线）：
+            #       地面：从右往左走（left，x=183~202）
+            #       → 跳到梯子(x=178) → 爬上去
+            #       → 高台：往右走（right，x=178~195）
+            #       → 折返点 goal=(198,93)
+            #     **全段统计**：left=20、right=18 ⇒ 主方向被算成 **left**
+            #       ⇒ `_near_seg_goal` 的判据变成 `px <= goal_x + reach = 199`
+            #       ⇒ 而**梯子在 x=178，178 ≤ 199 恒成立** —— 横向条件**永远满足**，
+            #         卡住切段的只剩"高度"那一条 ⇒ 爬到 y=96 就切段 ⇒ 角色还在
+            #         梯子半中腰就被判"到达" ⇒ 切到回程段后立刻被 `down` 赶下去。
+            #       （用户症状："爬不到顶"、"差一点点就要碰到梯子就回头"。）
+            #
+            #   ⇒ 正确语义：切段判据要回答的是「**我是不是朝着终点走过去的**」，
+            #     所以该看**终点附近**的行进方向，而不是整段的方向。
+            #     L 形路线的"接近段方向"与"整段方向"本来就相反。
+            #
+            #   实测（半径 10 / 15 / 20 三种取值结果完全一致：left=0、right=8/13/18）
+            #     ⇒ 本判据**对半径不敏感**，取 10 即可，也不需要新增配置项。
+            #     改后判据 = `px >= goal_x - reach = 197` ⇒ 只有真走到折返点附近
+            #     才切段，梯子底下(x=178)不再误触发 ✓
+            #
+            #   ⚠️ 对**直线路线完全无影响**：直线时"goal 附近方向"与"全段方向"
+            #      必然一致，判据与改动前逐字相同。
+            _DIR_NEAR_R = 10
+            _near = []
+            # ⚠️ 每段**重新取一次** goal 中心：`gx/gy` 是上一段 if goals 块里赋的，
+            #    本段没有 goal 时它会**残留上一段的值**（变量在循环外仍是旧值），
+            #    那样算出来的方向就是别段的 —— 所以这里显式重算一次，不靠残留。
+            _seg_goals_here = [(x, y) for x, y in pts
+                               if tuple(img[y, x][:3]) in goal_codes]
+            if _seg_goals_here:
+                _gx = sum(q[0] for q in _seg_goals_here) // len(_seg_goals_here)
+                _gy = sum(q[1] for q in _seg_goals_here) // len(_seg_goals_here)
+                _near = [(x, y) for x, y in pts
+                         if abs(x - _gx) + abs(y - _gy) <= _DIR_NEAR_R]
+            _scan_pts = _near if _near else pts   # goal 附近没像素时退回全段（保守）
             nl = nr = 0
-            for x, y in pts:
+            for x, y in _scan_pts:
                 cmd = (self.color_code.get(tuple(img[y, x][:3]))
                        or self.color_code_up_down.get(tuple(img[y, x][:3])))
                 if not cmd:
@@ -2922,10 +2973,49 @@ class MapleStoryAutoBot:
         if direction is None:
             reach = max(reach, 3)
 
+        # ★★ 2026-09-27 加：方向判定还要**满足"高度接近"**，否则会在
+        #    「终点在高处（梯子顶 / 上层平台）」时只凭 x 接近就误判到达。
+        #
+        #   现场（用户 minimaps/废都南方工地，2026-09-27 23:45 真机）：
+        #     段0 终点（内缩后）= **(180, 93)** —— 那是**梯子顶部**；
+        #     而人行进在 **y=116 的地面**上，梯子竖线在 x=178。
+        #     算得 reach=1 ⇒ 判据变成 `px <= 181` ⇒ **角色还在地面、离梯子还差约 3px
+        #     就被判"段0走完"→ 切段 → 立刻掉头**。
+        #     用户截图原话："差一点点就要碰到梯子了结果马上回头"，
+        #     而它**根本没机会爬梯子**（终点在 y=93，却在地面 y=116 就被判到达）。
+        #
+        #   ⇒ 规则：方向判定额外要求 `|py - g_y| <= goal_reach_y_tol`。
+        #     · 平坦路线（终点与人同高）Δy≈0 → **行为完全不变**；
+        #     · 终点在高处（本图 Δy=23）→ 必须先真的爬上去（Δy 收进容差）才切段。
+        #
+        #   ⚠️★ 2026-09-27 由 12 下调到 3（用户真机实测：12 会在**半路**就切段）
+        #     现场（minimaps/废都南方工地 的 ASCII 逐像素核对）：
+        #       route1 终点 goal 在 **y=93**（高台上），梯子竖线从 y=109 到 y=93，
+        #       地面在 y=116 ⇒ 全程爬升 **23px**。
+        #       容差=12 时：角色爬到 **y=105（只爬了 11px、约一半）** 就满足
+        #         `|105-93| = 12 <= 12` ⇒ 判"段0完成" ⇒ **切到 route2**；
+        #       而 route2 在同一根梯子上标的是 **down**（y=95~103）
+        #         ⇒ 于是角色**爬到一半掉头往下爬**（用户原话）。
+        #     ⇒ 3 能覆盖正常路线的高度抖动（搜索框/质心 ±1~2px），
+        #       又远小于本图 23px 的爬升 ⇒ 只有真爬到顶（y=96 以内）才切段。
+        #
+        #     ⚠️ 填 0 = 关掉本层（退回"只看 x"的老行为）。
+        #     ⚠️ 已知代价：若某张图的终点确实在够不着的高度（跳不上去 / 爬不上去），
+        #        角色会一直在该段打转而不切段 —— 那是**录制/地形问题**，
+        #        比"到不了就掉头"更容易被发现和修。
+        #        兜底：watchdog 的卡死检测（10s）会触发脱困，不会真的死住；
+        #        若某张图确实切不了段，把 `route.goal_reach_y_tol` 往上调即可。
+        #     可调：route.goal_reach_y_tol（默认 3）。
+        try:
+            _y_tol = int(self.cfg.get("route", {}).get("goal_reach_y_tol", 3) or 0)
+        except (TypeError, ValueError):
+            _y_tol = 3
+        _same_height = (_y_tol <= 0) or (abs(py - g[1]) <= _y_tol)
+
         if direction == "right":
-            passed = px >= g[0] - reach
+            passed = _same_height and px >= g[0] - reach
         elif direction == "left":
-            passed = px <= g[0] + reach
+            passed = _same_height and px <= g[0] + reach
         else:
             passed = (abs(px - g[0]) + abs(py - g[1])) <= reach
 
@@ -3610,11 +3700,134 @@ class MapleStoryAutoBot:
         # Use color_code and color_code_up_down to complement each other
         # To prevent character stuck at the end of ladder, we use two color color pixels
         # and let them complement with each other, to ensure smoothy ladder climbing
+        #
+        # ★ 2026-09-27 加：**贴身跳跃优先**（issue 现场：用户「跳上梯子」的路线没反应）
+        #   症状与根因（用用户的 route1.png 复刻引擎逻辑实测）：
+        #     跳跃圆点画在梯子竖线的**右边 2~7px**（跳跃 (87~91,106~110)，
+        #     梯子灰线 x=80 从 y=108 往下）。角色从左边走过来时：
+        #       x=79~86 → 梯子 d=3→0，跳跃 d=9→2 ⇒ 判据选**梯子** → 一直 `none up none`
+        #       x=87    → 跳跃 d=1，梯子 d=3      ⇒ 才轮到跳跃，但指令是 `right none jump`
+        #     而梯子在**左边** —— 向右跳只会离梯子越来越远。
+        #     ⇒ 结果：「走到梯子下一直按上（爬不上，入口偏高），等到发跳时方向已经错了」。
+        #   为什么不能只靠"重录得远一点"：跳跃点必须贴着梯子才好用，
+        #     画远了角色走过去会先被别的色码接走 —— 这是地形本身决定的。
+        #   ⇒ 本层只做一件事：**当两者都近到"人正踩在上面"时，让跳跃赢**。
+        #     判据用 `<=` 而非改全局距离口径，保证：
+        #       · 人还在路上（梯子 d 明显更小）→ 行为完全不变，仍按梯子走；
+        #       · 人已到跳跃点跟前（两者都 ≤ 2px）→ 才切到跳跃。
+        #     `ladder_adjacent` 阈值 2 的依据：跳跃圆点半径 2px + 一格像素，
+        #     人在这个范围内本来就同时"站在"两团像素上，此时方向由跳跃决定更符合录制意图。
+        _PREFER_JUMP_RADIUS = 2
         if color_code and color_code_up_down:
-            if color_code["distance"] < color_code_up_down["distance"]:
+            _cc_cmd = str(color_code.get("command", ""))
+            _is_jump = "jump" in _cc_cmd
+            _both_tight = (color_code["distance"] <= _PREFER_JUMP_RADIUS
+                           and color_code_up_down["distance"] <= _PREFER_JUMP_RADIUS)
+            # ★ 2026-09-27 加：**方向性跳跃要等走到梯子正下方再发**（治「跳太早摸不到梯子」）
+            #   现场数据（用户 minimaps/废都南方工地/route1.png，角色沿 y=126 右行）：
+            #     跳跃像素 x[78~84]、梯子(up)像素 x[81~84]
+            #     x=78 时最近色码 = `right none jump`（d=0），梯子 d=4
+            #     ⇒ 判据立刻发跳 ⇒ 人在 78、梯子在 81，**提前 3px 起跳**。
+            #   为什么 3px 就够呛：跳跃**保留水平速度**（本文件 :3109 实测过），
+            #     带着 right 起跳 ⇒ 落点比梯子更靠右 ⇒ 撞不到梯子；而且
+            #     `key.jump_cooldown: 1.0` 会把随后"对准梯子那一跳"整段挡掉。
+            #   ⇒ 规则：跳跃方向是 left/right（会横向漂移）+ 附近有梯子 + 尚未对齐
+            #      → **先只走路**（保留方向、去掉 jump），对齐后交回原逻辑。
+            #     ⚠️ **原地跳（move_x == "none"）不受影响** —— 那正是"站在梯子上跳"
+            #        用的动作，动了反而会让爬梯失效。
+            #     可调：route.jump_align_tol（默认 2，填 0 = 关闭本层）。
+            try:
+                _jtol = int(self.cfg.get("route", {}).get("jump_align_tol", 2) or 0)
+            except (TypeError, ValueError):
+                _jtol = 2
+            _jparts = _cc_cmd.split()
+            _jmx = _jparts[0] if _jparts else "none"
+            _lad_px = color_code_up_down.get("pixel")
+            # ★★ 2026-09-27 加：**跳跃时若附近有梯子，就同时按住"上"**
+            #
+            #   用户对爬梯机制的解释（2026-09-27 原话）：
+            #     "能不能抓住梯子不看落点，而看角色的抛物线和梯子重合的那个点，
+            #       角色是不是按住 up 了"
+            #     "边走边跳肯定不光是跳+上，还得带个方向键"
+            #   ⇒ 爬梯动作 = **方向 + 跳 + 上** 三键齐发。起跳后走抛物线，
+            #     只要"上"一直按着，抛物线扫过梯子那一列时角色**自动扒住** ——
+            #     不需要精确控制落点。
+            #
+            #   改前为什么抓不住：补 up 的条件是 `self.is_on_ladder`（见下面两处），
+            #     而**起跳瞬间人在空中/地面，is_on_ladder 为假** ⇒ 跳跃全程不按上
+            #     ⇒ 抛物线扫过梯子也抓不住。
+            #     真机症状（用户描述）："边走边跳爬梯子时没扒住梯子，也就是跳过了，
+            #     角色会继续往前走，而不会重试继续爬梯子"。
+            #
+            #   ⚠️ 只在"扫到了梯子像素"时才补 up（_lad_px is not None）：
+            #     用户确认"没有梯子的地方按跳+上不会变高、也不影响普通跳跃（跨缺口）"，
+            #     但仍按**最小影响**原则限定，避免动到普通跳跃。
+            #   ⚠️ 填 0 = 关掉本层：route.jump_hold_up
+            try:
+                _jump_hold_up = int(self.cfg.get("route", {}).get("jump_hold_up", 1) or 0)
+            except (TypeError, ValueError):
+                _jump_hold_up = 1
+            #   ⚠️★ 2026-09-28 修「沿高台走路时自动爬上路过的梯子」：
+            #     本标志**必须**同时要求 `_is_jump`（当前动作是跳跃）。
+            #     曾经漏了这个条件（只判 `_lad_px is not None`）⇒ 只要附近有梯子
+            #     像素它就是 True ⇒ 沿高台往右走时（`right none none`）也被补上 up
+            #     ⇒ 变成 `right up none` ⇒ **路过梯子就自动爬上去**
+            #     （用户真机现场："从梯子终点往右走一两个像素有个往上的梯子，
+            #       路过时按着 up 就自动爬上去了，爬到顶再从右边悬崖掉下来"）。
+            #   ⇒ 语义收窄为：**只在"跳跃那一帧"才补 up**（爬梯靠抛物线扒住），
+            #     纯走路时不补 —— 走路补 up 会误触发沿途的梯子。
+            _hold_up_on_jump = (_jump_hold_up > 0 and _is_jump and _lad_px is not None)
+            # ⚠️★ 2026-09-27 **撤回过一条规则**，别再加回来：
+            #   曾在此处加过「人在梯子上（is_on_ladder）→ 一律不跳、改按梯子方向」，
+            #   想治"爬上去又跳下来"。**真机实测证明它是错的**（用户 23:49）：
+            #     is_on_ladder 的判据是「横向几乎不动 + 纵向在动」（:4125-4130），
+            #     而**角色起跳时纵向就在动** ⇒ 跳跃途中被误判成"在梯子上"
+            #     ⇒ 该规则把跳跃换成按上 ⇒ 角色**到起跳点就站着按上、再也不跳**。
+            #     日志现场：`帧306 全局(182,116) 指令(none up none)`（在起跳点却不跳）。
+            #   ⇒ 教训：`is_on_ladder` **不能**用来判断"真的在爬梯"，
+            #     它在跳跃过程中同样为真。想区分"爬梯 vs 跳跃"必须另找依据。
+            if _is_jump and _jtol > 0 and _jmx in ("left", "right") \
+                    and _lad_px is not None \
+                    and abs(int(_lad_px[0]) - int(self.loc_player_global[0])) > _jtol:
+                # 还没和梯子对齐 → 先走过去（保留方向，去掉跳跃）
+                self.cmd_move_x, self.cmd_move_y, self.cmd_action = _cc_cmd.split()
+                self.cmd_action = "none"
+            elif _is_jump and _both_tight:
+                # 贴身且最近的是跳跃 → 用跳跃。
+                #
+                # ⚠️★ 方向键要按**梯子在哪边**来定，不能照抄色码里的方向：
+                #   现场数据（route1.png）：跳跃像素是 `right none jump`（录的时候
+                #   人是边向右走边跳的），可梯子（灰像素竖线）在跳跃点的**左边**。
+                #   照抄 `right` ⇒ 角色向右跳，离梯子越来越远，症状依旧是"跳不上去"。
+                #   而跳跃像素的左右方向**没有语义**：色码表里 jump 只有
+                #   left/right/down/none 四种组合、没有 up，录制器对"跳+上"
+                #   只能退成 `left/right none jump` —— 这个方向纯属录制时的副产品。
+                #   ⇒ 用梯子像素相对角色的方位来定：梯子在左就按左，在右就按右，
+                #     同列（|dx| ≤ 1）才真的原地跳（none）。
+                self.cmd_move_x, self.cmd_move_y, self.cmd_action = _cc_cmd.split()
+                _up_px = color_code_up_down.get("pixel")
+                if _up_px is not None:
+                    # 同列（差值 ≤1）不给方向：人在梯子正下方，直接原地起跳最稳。
+                    # 给方向会让角色在空中横移，落点偏出梯子 —— 这正是
+                    # "跳上平台又掉下去"的成因之一。
+                    _dx = int(_up_px[0]) - int(self.loc_player_global[0])
+                    if _dx <= -2:
+                        self.cmd_move_x = "left"
+                    elif _dx >= 2:
+                        self.cmd_move_x = "right"
+                    else:
+                        self.cmd_move_x = "none"
+                _cmd_ud = str(color_code_up_down.get("command", "")).split()
+                # ★ 跳跃 + 附近有梯子 → 同时按住"上"（见上方 _hold_up_on_jump 的说明）。
+                #   这是"抛物线与梯子重合时能扒住"的关键 —— 不再依赖 is_on_ladder。
+                if len(_cmd_ud) == 3 and self.cmd_move_y == "none" \
+                        and (self.is_on_ladder or _hold_up_on_jump):
+                    self.cmd_move_y = _cmd_ud[1]
+            elif color_code["distance"] < color_code_up_down["distance"]:
                 self.cmd_move_x, self.cmd_move_y, self.cmd_action = color_code["command"].split()
                 _, cmd, _ = color_code_up_down["command"].split()
-                if self.cmd_move_y == "none" and self.is_on_ladder:
+                # ★ 同上：跳跃时也补上（原来只在 is_on_ladder 时补，起跳时补不上）
+                if self.cmd_move_y == "none" and (self.is_on_ladder or _hold_up_on_jump):
                     self.cmd_move_y = cmd # only complement cmd_move_y when player is on ladder
             else:
                 # ★ 2026-09-17 防"地面伪灰"（用户报「路过管道一直往右走」的根因）。
@@ -3916,6 +4129,51 @@ class MapleStoryAutoBot:
         #    所以再用「离本段终点够近」补一次判定（见 _near_seg_goal）。
         #    ⚠️ 原注释写的是"一帧能移动十几像素"，那是**推断、从没实测**（2026-09-16 订正：
         #       实测 ~0.3 px/帧，差 20~50 倍）。别再引用那个数字。
+        #
+        # ★★ 2026-09-27 加：**`goal` 这条路径也要遵守"高度接近"**（治「没爬到顶就切段」）
+        #
+        #   为什么必须补这一层（真机现场，用户 minimaps/废都南方工地）：
+        #     route1 的 goal 圆点在 **y=90~94**（高台上），梯子从 y=109 爬到 93，
+        #     地面在 y=116 ⇒ 全程爬升 23px。而 goal 的**探测半径是 search_range=10**
+        #     ⇒ 角色爬到 **y=100** 时，到 goal 的距离就是 8 < 10 → `_scan` 命中了 goal
+        #     → `self.cmd_action = "goal"` → **下面这行直接判"到达"→ 切段**。
+        #     可此时 Δy = |100-93| = 7，**人还在梯子半中腰**。
+        #     ⇒ 切到回程段(route2) 后，那段在同一根梯子上标的是 **down**
+        #       ⇒ 角色**爬到一半掉头往下爬**（用户原话）。
+        #
+        #   ⚠️ 上一轮只给 `_near_seg_goal()` 加了高度容差（goal_reach_y_tol），
+        #      但**这条 `cmd_action == "goal"` 是另一条路径、绕过了它** ⇒ 没治住。
+        #      两条路径必须用**同一个高度判据**，否则又是一次"改一处漏一处"。
+        #
+        #   ⚠️ 容差与 `_near_seg_goal` 共用 route.goal_reach_y_tol（默认 3）；
+        #      填 0 = 两边一起关掉（退回只看"有没有踩到 goal"的老行为）。
+        #   ⚠️ 为什么这里可以用"绝对高度"判断：goal 是**录制时人真站过的位置**，
+        #      它和"人该在的高度"天然一致 —— 不像虚拟坐标需要额外推算。
+        try:
+            _goal_y_tol = int(self.cfg.get("route", {}).get("goal_reach_y_tol", 3) or 0)
+        except (TypeError, ValueError):
+            _goal_y_tol = 3
+        _goal_height_ok = True
+        _g = None
+        if _goal_y_tol > 0 and self._seg_goals:
+            _i = self.idx_routes
+            if 0 <= _i < len(self._seg_goals):
+                _g = self._seg_goals[_i]
+        if _g is not None and self.loc_player_global:
+            _goal_height_ok = abs(self.loc_player_global[1] - _g[1]) <= _goal_y_tol
+            if self.cmd_action == "goal" and not _goal_height_ok:
+                # 够到 goal 像素但高度差太大（还在半路）→ **不切段**，
+                # 保持本帧指令（继续爬），并节流打一行日志便于排查。
+                _now = time.time()
+                if _now - getattr(self, "t_goal_height_block_log", 0) > 5:
+                    self.t_goal_height_block_log = _now
+                    logger.info(
+                        f"[切段] 探到 goal 像素，但高度差 "
+                        f"{abs(self.loc_player_global[1] - _g[1])}px > 容差 {_goal_y_tol}px "
+                        f"（人 y={self.loc_player_global[1]} / 终点 y={_g[1]}）"
+                        f"—— 判定**还在半路**，暂不切段，继续按当前段走。\n"
+                        f"        想放宽：route.goal_reach_y_tol（当前 {_goal_y_tol}）")
+                return
         reached = (self.cmd_action == "goal") or self._near_seg_goal()
         if not reached:
             return
@@ -4040,14 +4298,62 @@ class MapleStoryAutoBot:
         # Update player location
         if loc_player is not None:
             # Check if character is on ladder
+            #
+            # ⚠️ `dx`/`dy` 是**屏幕坐标**的差值（loc_player 来自名字定位）。
+            #    下方新增的判据改用**小地图全局坐标**，原因见那段说明。
             dx = abs(loc_player[0] - self.loc_player[0])
             dy = abs(loc_player[1] - self.loc_player[1])
+            #
+            # ⚠️★ 2026-09-28 加：**用小地图全局 x 判断"是否还在梯子上"**
+            #
+            #   现场（用户真机 00:37/00:42 + 逐帧日志）：角色爬到第一个梯子顶（y≈93）后，
+            #   **引擎仍继续按 up** ⇒ 正好遇到游戏里第二个真梯子 ⇒ 被带上去
+            #   （日志 `x=186 y=86 指令(right up none)` —— x 已从 178 走到 186，
+            #     **up 却还在**）。
+            #
+            #   为什么原来的 `dx > 3` 判不出去：这里的 `dx` 是**屏幕坐标**
+            #   （`loc_player` 来自名字定位），而**画面会随角色滚动** ——
+            #   爬梯时屏幕 x 的漂移与"真的横向走"混在一起，这个阈值抓不准。
+            #   实测：用户往右只走 1~2 个**小地图像素**（全局 x 178→180），
+            #   屏幕上却不足以让 dx 稳定超过 3。
+            #
+            #   ⇒ 用**小地图全局坐标**判断（那才是"角色在平台上的真实横向位移"）：
+            #     爬到梯子顶、开始沿平台横向移动时，全局 x 会持续变化 ⇒ 判"已下梯"。
+            #   实测依据（用户 00:37 那次日志）：爬梯过程中**全局 x 精确停在 178**
+            #     （4 次采样全部 178，零抖动）⇒ 用全局 x 判断**不会误触发**。
+            #
+            #   ⚠️ 两个条件**任一满足**即下梯：
+            #     ①（原有）屏幕 dx > 3 —— 保留，兼容既有行为；
+            #     ②（新增）**全局 x 变化 ≥ ladder_leave_x**（默认 2）
+            #        —— 爬梯时全局 x 恒定，所以 2 像素就能可靠区分。
+            #     可调：route.ladder_leave_x（填 0 = 关掉本层，退回只看屏幕 dx）。
+            _gx = getattr(self, "loc_player_global", None)
+            _gx_prev = getattr(self, "_ladder_gx", None)
+            _gx_jump = None
+            if _gx and _gx_prev:
+                _gx_jump = abs(int(_gx[0]) - int(_gx_prev[0]))
             if self.is_on_ladder:
-                if dx > 3: # Leave ladder if there is horizontal move
+                try:
+                    _gx_tol = int(self.cfg.get("route", {}).get("ladder_leave_x", 2) or 0)
+                except (TypeError, ValueError):
+                    _gx_tol = 2
+                if dx > 3:  # 原有：屏幕横向移动
                     self.is_on_ladder = False
+                elif (_gx_tol > 0 and _gx_jump is not None and _gx_jump >= _gx_tol):
+                    # 新增：小地图全局 x 变了 ⇒ 已经在平台上横向移动 ⇒ 下梯
+                    self.is_on_ladder = False
+                    _now = time.time()
+                    if _now - getattr(self, "t_ladder_leave_log", 0) > 2:
+                        self.t_ladder_leave_log = _now
+                        logger.info(
+                            f"[梯子] 全局 x 变化 {_gx_jump}px（{_gx_prev[0]} → {_gx[0]}）"
+                            f"⇒ 判定已离开梯子（在平台上横向移动），停止按 up。")
             else:
                 if dx < 3 and dy != 0:
                     self.is_on_ladder = True
+            # 记下本帧全局 x，供下一帧比较（见上）
+            if _gx:
+                self._ladder_gx = _gx
             # logger.info((self.is_on_ladder, dx, dy))
             # Update player location
             self.loc_player = loc_player

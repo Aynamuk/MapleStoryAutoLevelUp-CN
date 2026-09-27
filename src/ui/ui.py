@@ -669,6 +669,12 @@ class MainWindow(QMainWindow):
     hotkey_f3 = Signal()
     hotkey_f4 = Signal()
 
+    # 录制器多久没输出就判定它已死（秒）—— 见 _recorder_alive 的说明。
+    # 取 20s 的理由：录制器正常时至少每几秒会有一行日志（抓帧/存段/体检），
+    # 20s 没有任何输出基本可以断定它卡死或被强杀了；同时不至于把
+    # "正在等用户操作"的短暂安静误判成死亡。
+    _RECORDER_STALE_SEC = 20.0
+
     def __init__(self, controller=None):
         super().__init__()
 
@@ -785,6 +791,12 @@ class MainWindow(QMainWindow):
         self.hotkey_f2.connect(self._hotkey_f2_guarded)
         self.hotkey_f3.connect(self._hotkey_f3_guarded)
         self.hotkey_f4.connect(self._hotkey_f4_guarded)
+        # ── 录制器"存活兜底"两个时间戳（见 _recorder_alive，2026-09-27 加）──
+        # _recorder_started_t / _recorder_last_output_t：前者在启动录制器时置位，
+        # 后者每次收到录制器输出时刷新；两者都超过 _RECORDER_STALE_SEC 秒没有任何
+        # 动静，就认为录制器已死（防它被强杀/卡死后永久吞掉主界面 F1~F4 热键）。
+        self._recorder_started_t = None
+        self._recorder_last_output_t = None
 
     def refresh_map_list(self):
         """重新扫描 minimaps/ 与登记表，刷新地图列表（2026-09-12 用户需求）。
@@ -2593,6 +2605,31 @@ class MainWindow(QMainWindow):
                     "没有它，工具按不动你的角色（表现就是「点了开始，角色一动不动」）。")
                 box.setInformativeText(how_to_install_driver())
                 box.exec_()
+            elif ret == -3:
+                # 没有可用路线（2026-09-27 加）——
+                # 不拦的话症状是「点开始后角色一动不动、日志也不刷」，
+                # 而前台守卫还在抢窗口，用户以为是程序卡死，只能去任务管理器强杀。
+                self.button_start_pause.setChecked(False)
+                self.button_start_pause.setText("▶ 开始 (F1)")
+                self.button_start_pause.setStyleSheet("")
+                _m = self.selected_map or "（未选择地图）"
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Warning)
+                box.setWindowTitle("这张图还没有可用路线")
+                box.setText(
+                    f"地图「{_m}」**没有一条可用的路线**，所以没能开始挂机。\n\n"
+                    "如果就这么开始，角色会一动不动（看不出原因），"
+                    "所以这里先拦下来了。")
+                box.setInformativeText(
+                    "常见原因：\n"
+                    "　· 路线没有**终点标记**（录制时没走到最后一步就保存了）\n"
+                    "　· 这张图根本没录过路线\n"
+                    "　· 去程和回程叠在了同一段里\n\n"
+                    "**怎么修**：按 F4 重录这张图 ——\n"
+                    "　起点开始走 → 中途要折返就按一次分段 → "
+                    "**走到终点按 F3 保存**（这一步才会盖上终点标记）。\n\n"
+                    "日志区里有 `[路线校验]` 打出的具体原因，照着看更准。")
+                box.exec_()
             else:
                 # Start failed
                 self.button_start_pause.setChecked(False)
@@ -3084,6 +3121,10 @@ class MainWindow(QMainWindow):
             args.append('--append-home')
         self._recorder_proc = proc
         self._recorder_map_id = map_id      # 结束时体检要用（见 _on_recorder_finished）
+        # 存活兜底的两个时间戳（见 _recorder_alive）：启动那一刻先同时置位，
+        # 之后每次收到输出只刷 _recorder_last_output_t。
+        self._recorder_started_t = time.time()
+        self._recorder_last_output_t = time.time()
         self._last_recorder_routes = 0
         self._last_recorder_home = 0    # 回正线状态：0 没录 / 1 正在录 / 2 已存
         self.append_log("[录制] 启动录制器：%s%s"
@@ -3198,10 +3239,44 @@ class MainWindow(QMainWindow):
         self._last_recorder_home = home
 
     def _recorder_alive(self):
-        """录制器是否正在跑 —— 热键挂起与按钮守卫的唯一判据。"""
+        """录制器是否正在跑 —— 热键挂起与按钮守卫的唯一判据。
+
+        ⚠️★ 2026-09-27 修「F1 暂停键失效」：
+          原实现只看 `proc.state() != QProcess.ProcessState.NotRunning`。
+          这个判据在**进程异常死亡时不可靠** —— 录制器是被
+          任务管理器强杀 / 崩溃 / 卡死时，Qt 的进程状态可能一直停在
+          Running（正常退出走 `finished` 信号才会清零 `_recorder_proc`）。
+          而 `_hotkeys_suspended()` 一旦认为"录制器还活着"，就会把
+          **主界面 F1~F4 全部吞掉**（`_hotkey_f1_guarded` 直接 return）。
+
+          症状（用户实测）：录制器结束后想按 F1 暂停挂机，**按了没反应**，
+          而挂机仍在跑、还在抢前台窗口，用户只能去任务管理器强杀进程。
+
+          ⇒ 加**存活兜底**：进程状态说"在跑"还不够，还要求它**最近有过输出**；
+            超过 `_RECORDER_STALE_SEC` 秒没有任何 stdout/stderr，
+            就判定它已经死了，热键立刻恢复可用。
+            这样"卡死但没退出"的录制器最多挡住热键 20 秒，不会永久吞键。
+
+        Returns:
+            bool: True = 录制器仍在正常运行（此时主界面 F1~F4 让位）
+        """
         proc = self._recorder_proc
-        return (proc is not None
-                and proc.state() != QProcess.ProcessState.NotRunning)
+        if proc is None:
+            return False
+        if proc.state() == QProcess.ProcessState.NotRunning:
+            return False
+        # 进程状态说在跑 —— 再用"最近有没有输出"确认一次（防卡死/被强杀）
+        last = getattr(self, "_recorder_last_output_t", None)
+        if last is None:
+            # 还没收到过任何输出：以启动时刻为基准（避免刚启动就被误判为死）
+            last = getattr(self, "_recorder_started_t", None)
+        if last is not None and (time.time() - last) > self._RECORDER_STALE_SEC:
+            logger.warning(
+                f"[录制] 录制器超过 {self._RECORDER_STALE_SEC:.0f} 秒没有任何输出，"
+                f"判定它已经停止响应 —— 恢复主界面 F1~F4 热键。\n"
+                f"        如果它确实还在跑，请到任务管理器结束 python 进程。")
+            return False
+        return True
 
     def _on_recorder_output(self):
         """录制器的 stdout/stderr → 状态行解析（喂面板）+ 其余进日志区。"""
@@ -3209,6 +3284,8 @@ class MainWindow(QMainWindow):
         if proc is None:
             return
         text = bytes(proc.readAllStandardOutput().data()).decode('utf-8', 'replace')
+        # 收到输出 = 它活着（见 _recorder_alive 的存活兜底）
+        self._recorder_last_output_t = time.time()
         for line in text.splitlines():
             line = line.rstrip()
             if not line:

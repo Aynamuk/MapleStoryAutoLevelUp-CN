@@ -85,6 +85,24 @@ from tools.template_capture import (grab_game_frame, save_raw_snapshot,  # noqa:
                                     draw_cn_text, CANVAS_MAX)
 
 GREEN = (0, 255, 0)
+# ⚠️★ 2026-09-27 一次**险些误改**的记录 —— 想改这个颜色前务必先读完：
+#   有人（我）看到「绿 (0,255,0) 的灰度恰好 = 150，而引擎用 inRange(gray,150,255)
+#   判白字」就断定绿底会被误当成白字，于是把它改成纯黑。**那个判断是错的。**
+#
+#   引擎实际有**两层**掩码（MapleStoryAutoLevelUp.py:1067-1112）：
+#     ① white_mask 模式：inRange(gray,150,255) 把模板二值化
+#     ② 再叠一层 `get_mask(self.img_nametag, (0,255,0))`
+#        —— 这是**精确颜色匹配**（common.get_mask：`np.all(img == color)` 后取反），
+#        绿像素 → 0（忽略），其余 → 255（参与比对）。
+#
+#   ⇒ 绿底**会被第②层精确排除**，机制是好的；灰度 150 那点"撞阈值"在第②层被兜住了。
+#   ⇒ 改成黑色反而**更糟**：黑不是 (0,255,0)，get_mask 找不到绿 → 掩码全 255
+#      → 连底色一起参与比对，失去"只比文字"的判别力。
+#
+#   ⚠️ 结论：**保持亮绿，不要再改这个常量。**
+#      排查"名字定位失败"时，先看 `nametag.mode` 是不是 white_mask、
+#      以及 `extract_template` 的抠图阈值是否与引擎一致 —— 那两处才是真问题。
+GREEN = (0, 255, 0)
 WIN = "nametag_calibrate"
 WIN_PREVIEW = "nametag_template_preview"
 # 抠图废模板判据（与 skill 里一致）：前景像素太少 = 没抠到东西，别拿去用
@@ -158,6 +176,22 @@ def write_config(name, offset, path=None):
         data["nametag"] = nt
     nt["name"] = name
     nt["offset"] = [int(offset[0]), int(offset[1])]
+    # ⚠️★ 2026-09-27 必须**一并写 mode**：
+    #   本工具生成的模板是「**白字掩码**」形态 —— 非文字像素被涂成纯绿 (0,255,0)
+    #   当掩码（见 extract_template 的 `tpl[fg == 0] = GREEN`）。
+    #   这种模板**只能**配 `white_mask` 模式（引擎里会 inRange 只留白字，
+    #   绿底自动忽略）；配 `grayscale` 会把 78% 的绿底也拿去比对 ——
+    #   而游戏画面里根本没有这块绿 → **每次匹配都失败**。
+    #
+    #   原来这里只写 name / offset，于是 mode 永远继承 config_default 的
+    #   `grayscale` ⇒ **工具和默认配置天生不配，每个用户都会踩**。
+    #   症状：日志刷 `名字命中False(missN)` → 角色定位退化到小地图
+    #   （精度仅 ±10~13 游戏像素）→ 跳跃判定不准（"跳太早摸不到梯子"）、
+    #   攻击框落偏（打不到怪）。实测复现于 2026-09-27 用户现场。
+    #
+    #   为什么不让用户自己填：**工具知道它生成的是哪种模板**，就该自己把
+    #   配套模式写对 —— 让用户去猜 white_mask/grayscale 是不合理的。
+    nt["mode"] = "white_mask"
 
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -232,11 +266,30 @@ def extract_template(img, drag_rect):
         return sub.copy(), (x, y, x + w, y + h), None
 
     gray = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
-    _, fg = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # ⚠️★ 2026-09-27 修「抠图与引擎阈值不一致」（用户实测三次标定全部失败）：
+    #   原实现用 **Otsu 自适应阈值**：
+    #       _, fg = cv2.threshold(gray, 0, 255, THRESH_BINARY + THRESH_OTSU)
+    #   而引擎匹配时用的是**固定阈值**（MapleStoryAutoLevelUp.py:1071）：
+    #       cv2.inRange(img, 150, 255)        # white_mask 模式
+    #   两者对"什么算白字"的定义不同 ⇒ 模板留下的"白字"和引擎要找的"白字"对不上。
+    #
+    #   更糟的是 Otsu 的行为：它**自动挑一个把画面分成两半的阈值**，
+    #   所以输出的"亮部"比例天然接近 50~60% ⇒ 下面那条 `ratio > 0.60` 的防呆检查
+    #   **几乎永远不会触发**，形同虚设 —— 坏模板就这么一路被当成好的存了下来。
+    #
+    #   实测（用户 minimaps 现场，名字牌 = 白字 + 深灰半透明底板）：
+    #     用 Otsu：深灰底板被并进"亮部"一起保留 → 存出的模板用引擎阈值一量，
+    #             **97% 的像素被判成白字**（健康值应为 15~25%）⇒ 匹配必然失败。
+    #     改成固定 150：与引擎口径一致 ⇒ 只留下真正的白色字形。
+    #
+    #   ⇒ 结论：抠图**必须**用引擎同一个阈值 150。改回 Otsu 会让匹配重新失效。
+    _WHITE_THRESH = 150          # 与引擎 white_mask 分支的 inRange(150,255) 对齐
+    _, fg = cv2.threshold(gray, _WHITE_THRESH, 255, cv2.THRESH_BINARY)
     n_fg = int((fg > 0).sum())
 
-    # 名字是白字 → 应只占框里的一小条。若 Otsu 判出「亮部」占了大半，
+    # 名字是白字 → 应只占框里的一小条。若亮部占了大半，
     # 说明框没框准（把背景/称号一起框进来了），或名字跟背景亮度太接近。
+    # （用固定阈值后这条检查才真正生效 —— 见上面对 Otsu 的说明。）
     ratio = float((fg > 0).mean())
     if ratio > 0.60:
         return None, None, (f"框里 {ratio*100:.0f}% 的像素都偏亮，不像「白字只占一小条」。"

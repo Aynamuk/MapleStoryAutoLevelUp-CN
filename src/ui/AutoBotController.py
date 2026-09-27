@@ -138,6 +138,33 @@ class AutoBotController(QObject):
                 + "\n".join("        " + ln for ln in how_to_install_driver().splitlines()))
             return -2   # 与"配置加载失败(-1)"区分开，界面据此弹安装指引
 
+        # ── 有效路线前置检查（2026-09-27 加）────────────────────────────────
+        # 为什么必须在这里拦：路线全部判废时 `img_routes` 是空列表，而引擎**没有**
+        # 自我保护 —— `get_nearest_color_code()` 第一行就是
+        # `h, w = self.img_route.shape[:2]`（`img_route` 为 None）⇒ 每帧抛
+        # `AttributeError: 'NoneType' object has no attribute 'shape'`，
+        # 主循环停摆但**不退出**。
+        #
+        # 症状（用户实测）：点 F1 后「角色一动不动、日志也不刷屏」，而**前台守卫
+        # 线程还在正常把游戏窗口抢回前台** ⇒ 表现得像"程序卡住了"，
+        # 用户只能去任务管理器强杀进程，完全不知道真因是路线判废。
+        #
+        # ⇒ 在这里拦下，把「哪张图、为什么废、怎么修」直接讲清楚，而不是启动后装死。
+        #   （判据用 img_routes 是否为空：所有判废分支都走 `continue`，
+        #     不会进这个列表，见 MapleStoryAutoLevelUp 加载路线那段。）
+        if not getattr(self.auto_bot, "img_routes", None):
+            self.no_route_problem = True
+            _map = (cfg.get("bot", {}) or {}).get("map", "") or "<未选择>"
+            logger.error(
+                f"[start_bot] 地图「{_map}」**没有一条可用的路线**，已阻止启动 —— "
+                f"否则会表现为「点开始后角色一动不动」，且日志不会继续刷新。\n"
+                f"        常见原因：这条路线判废了（没有终点 goal 标记 / 没录到路线 / "
+                f"去程回程叠在一段）。\n"
+                f"        上面的日志里有 [路线校验] 打出的**具体原因**，照着修即可。\n"
+                f"        怎么补：主界面按 F4 重录这张图 —— 一路走到终点按 F3 保存"
+                f"（收尾会自动盖上 goal 标记）。")
+            return -3   # 与"驱动不可用(-2)"区分开，界面据此弹"没有可用路线"
+
         # Start the bot engine
         try:
             self.auto_bot.start()

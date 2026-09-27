@@ -921,6 +921,25 @@ class RouteRecorder():
 
         必须在**帧末**画（见 run_once 里的 _want_save_route）：同帧画的移动线会盖住它，
         引擎找不到 goal 就会在段末原地死锁。
+
+        ⚠️★ 2026-09-27 撤回一次**错误的修改**，并在此钉死正确口径：
+          有人（我）一度把这里改成 `color=tuple(color_rgb)`，理由是"文件直读找不到黄色
+          ⇒ goal 没写成功"。**这个推理是错的**，因为它漏了「引擎读取时会再翻转一次」：
+
+            录制器（本函数）：写入前翻一次 RGB→BGR
+            引擎（MapleStoryAutoLevelMap.py:676）：读入后再翻一次 BGR→RGB
+            ⇒ 两次翻转**互相抵消**，配置里的 (255,255,0) 最终被引擎正确识别为 goal。
+
+          实测证据（用户 minimaps/废都南方工地/route1.png，同一次录制）：
+            颜色          文件里的值        引擎 cvtColor(BGR2RGB) 后
+            配置 left     (0,0,255) 蓝      → (255,0,0) 红 = **配置里的 left** ✓
+            配置 right    (255,0,0) 红      → (0,0,255) 蓝 = **配置里的 right** ✓
+            goal（原写法）(0,255,255) 青    → (255,255,0) 黄 = **配置里的 goal** ✓
+            goal（我改后）(255,255,0) 黄    → (0,255,255) 青 = **配置里没有** ✗ 判废
+
+          ⇒ 结论：**必须保留这里的翻转**。文件里 goal 是青色是"正确"的，不是 bug。
+            验证这条路线的正确方法是用**引擎的口径**看（转一次之后），
+            而不是用 cv2 直读文件 —— 直读看到的颜色天生是"反的"。
         """
         if self.img_route is None:
             return
@@ -1042,7 +1061,17 @@ class RouteRecorder():
                             self._blob_pixels[(_xx, _yy)] = color_bgr
                 logger.info(f"[录制] 记下{action} → {color_rgb} 于 ({px},{py})")
                 self.t_last_draw_blob = time.time()
-                self.loc_player_global_last = None
+                # ⚠️★ 2026-09-27 修：**不再清空位置基准**，改为更新到跳跃点。
+                #   旧代码是 `self.loc_player_global_last = None`。
+                #   后果（直调 paint_step 实证）：下一帧走的那一笔因为 last 是 None，
+                #   退化走 `if self.loc_player_global_last is None` 分支（起点=终点），
+                #   **画出来是零长度 → 那一整段移动线丢失**。
+                #   实测：走→跳→走，第 40 行 21~49 共 29 个 x 坐标整段空白，
+                #   蓝线只在跳跃前后的两点各留一个点 —— 路线看着"断成几截"。
+                #   为什么以前要清：担心"跳跃圆点旁边接着画线会把圆点盖回去"。
+                #   但现在有**跳跃色保护**（_blob_pixels + 帧末重涂，见本函数末段），
+                #   圆点被盖会自动补回 ⇒ 这个清空已经没有存在理由，只剩副作用。
+                self.loc_player_global_last = (px, py)
         else:
             if self.loc_player_global_last is None:
                 px_last, py_last = self.loc_player_global

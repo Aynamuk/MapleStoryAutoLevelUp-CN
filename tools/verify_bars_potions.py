@@ -195,6 +195,45 @@ def main():
           (kb_fg.sent == ["pageup"]) and (ret_fg is True),
           f"发了={kb_fg.sent} 返回={ret_fg}")
 
+    # ── 【11b】★契约：真实的 KeyBoardController 必须真的有 press_key ────
+    # 🔥 2026-09-27 加（issue #4 后续，这是个**真机才暴露**的坑）：
+    #   上面【11】用的 _FakeKB 自己写了 press_key 方法，于是测试一直是绿的；
+    #   但真实的 KeyBoardController 当时只有私有的 `_press`，**没有** press_key
+    #   ⇒ 真机挂机时喝药一直报：
+    #        [喝药] 发送药水键 'home' 失败：'KeyBoardController' object has no attribute 'press_key'
+    #   症状很隐蔽：只打一行 WARNING，挂机不停、不崩，用户以为"喝药功能没生效"。
+    #   ⚠️ 教训：桩（Fake）上的方法名与真实类不一致时，测试会给**假绿** ——
+    #      凡是"跨模块按名字调用"的接口，必须有一条断言打在现代码上（不是打在桩上）。
+    #      本用例用 inspect 直接查真实类的方法表，不实例化（避免依赖驱动/配置）。
+    try:
+        import inspect
+        from src.input.KeyBoardController import KeyBoardController
+        has_pub = callable(getattr(KeyBoardController, "press_key", None))
+        check("★真实 KeyBoardController 有公开 press_key（喝药模块按此名调用）",
+              has_pub,
+              "缺该方法时喝药会静默失败：'KeyBoardController' object has no attribute 'press_key'")
+        # 顺带钉住：它必须与私有的 _press 并存（引擎主循环在用 _press，别被改名合并）
+        check("私有 _press 仍保留（引擎主循环在用，不可被改名/合并）",
+              callable(getattr(KeyBoardController, "_press", None)))
+        sig = inspect.signature(KeyBoardController.press_key)
+        # 数「除 self 外」的位置参数
+        _pos = [p for n, p in sig.parameters.items()
+                if n != "self" and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        check("press_key 除 self 外接收 1 个位置参数（key）",
+              len(_pos) == 1, f"实际签名={sig}")
+    except Exception as e:                                       # noqa: BLE001
+        check("★真实 KeyBoardController 有公开 press_key（喝药模块按此名调用）",
+              False, str(e))
+
+    # ── 【11c】契约：potions.press_potion 调用的确实是 press_key ────────
+    # 防止有人把 potions.py 那侧改回别的名字，又让两边对不上。
+    try:
+        _pot_src = open("src/utils/potions.py", encoding="utf-8").read()
+        check("potions.py 通过 kb.press_key(...) 调用（与上面契约配套）",
+              "kb.press_key(key)" in _pot_src)
+    except Exception as e:                                       # noqa: BLE001
+        check("potions.py 通过 kb.press_key(...) 调用（与上面契约配套）", False, str(e))
+
     # ── 【12】配置里必须有 bars / potion 段且 span 齐备 ────────────────
     # 出厂值缺 span 就是本次修的那个"血满着疯狂喝药"的坑。
     try:

@@ -340,6 +340,21 @@ class KeyBoardController():
         press_key(key)
         self.n_key_sent += 1
 
+    def press_key(self, key):
+        '''
+        公开的点按入口 —— 供**引擎外部**（如自动喝药 utils/potions.py）调用。
+
+        ★ 2026-09-27 加（issue #4 后续）：喝药模块按 `kb.press_key(key)` 调用，
+        但本类此前只有私有的 `_press`，没有 `press_key`
+        ⇒ 运行时报 `'KeyBoardController' object has no attribute 'press_key'`，
+        症状是**喝药一直静默失败**（只打一行 WARNING，挂机本身不停）。
+        这里补上公开方法，内部仍走 `_press`：
+          · 复用同一套计数（n_key_sent 供 [按键状态] 心跳统计）；
+          · 与引擎内部点按走**同一条** Interception 通路，不存在两套行为。
+        不要删上面的 `_press`（引擎主循环在用），也不要改名叫 `_press`。
+        '''
+        self._press(key)
+
     def limit_fps(self):
         '''
         Limit FPS

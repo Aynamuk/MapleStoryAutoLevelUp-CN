@@ -46,7 +46,17 @@ if not exist "run_gui.py" (
 )
 
 rem 防重复启动：已经在跑就不再开一个
-powershell -NoProfile -Command "if (Get-CimInstance Win32_Process | Where-Object {$_.Name -like 'python*' -and $_.CommandLine -match 'run_gui'}) { exit 1 } else { exit 0 }"
+rem
+rem ⚠️★ 2026-09-27 换判据（与 停止界面.bat 同一个根因）：
+rem   原判据 `$_.Name -like 'python*' -and $_.CommandLine -match 'run_gui'` **双重失效**：
+rem     ① 界面以**管理员身份**运行（挂机要 Interception 发按键），而 Get-CimInstance
+rem        在普通权限下读管理员进程的 CommandLine 返回**空** ⇒ 匹配不到 ⇒ 防重复形同虚设；
+rem     ② bat 内联 `-Command "..."` 时 **cmd 会吃掉 `$` 符号**（实测 `$_.Name` 会变成
+rem        `_.Name` 之类）⇒ PowerShell 收到的是坏命令，判据更不可靠。
+rem   实测（2026-09-27）：CIM 判据找到 **0** 个 run_gui 进程（界面其实开着）。
+rem   ⇒ 改用**窗口标题**判断，并把逻辑放进 _ui_running.ps1（-File 调用，绕开 cmd 转义）。
+rem     标题来自 src/ui/ui.py 的 setWindowTitle，改标题时要同步 _ui_running.ps1。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0_ui_running.ps1"
 if errorlevel 1 (
     echo.
     echo   界面已经在运行了，不用重复打开。

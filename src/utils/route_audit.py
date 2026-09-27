@@ -216,6 +216,15 @@ def audit_map(map_name, cfg):
     home_masked = None   # mask 三连后的回正线图 —— v0.9 逐条判废用它
     for f in files:
         is_home = (f == "route_home.png")
+        # ⚠️★ 2026-09-27：**必须保留这次 cvtColor(BGR2RGB)** —— 曾经有人（我）把它
+        #    当成"多转一次"删掉，结果把好路线判成"没有 goal"。**那次删是错的，已撤回**。
+        #
+        #    正确口径（与引擎 `MapleStoryAutoLevelUp.py:676` 完全一致）：
+        #        录制器写入时翻一次 RGB→BGR（见 routeRecorder 的 _stamp_goal 说明），
+        #        读入方再翻一次 BGR→RGB ⇒ 两次抵消，颜色才等于 **config 里写的键**。
+        #    实测（用户 minimaps/废都南方工地/route2.png）：
+        #        直读命中配置色码 = 29 个；转一次后 = **57** 个 ⇒ 转一次才是对的。
+        #    ⇒ 判断"有没有 goal / 方向有没有冲突"，一律用**转一次之后**的图。
         img = cv2.cvtColor(load_image(os.path.join(base, f)), cv2.COLOR_BGR2RGB)
         if is_home:
             home_img = img.copy()      # mask 是就地改的，先留一份原始快照
@@ -267,6 +276,9 @@ def audit_map(map_name, cfg):
         p = os.path.join(base, f)
         if not os.path.exists(p):
             continue
+        # ⚠️★ 2026-09-27：同样**必须保留** cvtColor(BGR2RGB)（见上面 loop 里的说明）。
+        #    这条冲突检测也要用"转一次之后"的图 —— 否则左右方向会整体互换，
+        #    `_count_direction_conflicts` 数出来的左/右会完全反过来。
         img = cv2.cvtColor(load_image(p), cv2.COLOR_BGR2RGB)
         n_conf, n_l, n_r = _count_direction_conflicts(img, b.color_code)
         if n_conf:
