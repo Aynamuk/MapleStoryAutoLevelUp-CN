@@ -297,6 +297,12 @@ python -m tools.verify_ci_green_check     # 发版门禁的判据本身（离线
 
 > CI 里登记的那批在 `.github/workflows/ci.yml`，改动 `src/` 后请一并跑一遍。
 
+## 遇到问题 / 参与讨论
+
+- **使用问题、报错、跑不动** → 先看 [用户版说明](README_用户版.md)（有完整排查步骤），再考虑开 [issue](../../issues)，**务必附日志文件**；
+- **想提问、提建议、聊两句** → 都去 [Discussions](../../discussions)，已置顶[发帖指引](../../discussions/7)；
+- **怎么分** → 需要**改代码**的走 issue；只是**想问点什么**的走 Discussion。这样 issue 列表里留下的才是真 bug。
+
 ## 许可与致谢
 
 - 本项目基于 [kenyu910645/MapleStoryAutoLevelUp](https://github.com/kenyu910645/MapleStoryAutoLevelUp)（MIT License，Copyright (c) 2025 Ken Yu）修改而来，遵循同一 MIT 协议。
