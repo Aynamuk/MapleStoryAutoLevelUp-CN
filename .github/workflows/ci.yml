@@ -80,6 +80,7 @@ jobs:
             'verify_mob_boxes',
             'verify_mob_library',
             'verify_mob_lib_ui',
+            'verify_map_buttons',
             'verify_ci_green_check'
           )
           # ⚠️ 注意：tools/verify_nametag_fallback_limit.py **不进 CI** ——
