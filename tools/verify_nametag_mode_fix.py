@@ -6,14 +6,26 @@
 是一次回归（真机帧 14/14 复现：匹配锁死填充边、分数完美无告警）。
 本修复在引擎 load_config 里自动把 white_mask 纠正为 grayscale。
 
-本自检验三件事（不开游戏、不要窗口）：
+本自检验三件事（不开游戏、不要窗口、不依赖任何私有素材）：
   1. 存量 white_mask 配置 → load_config 后被改为 grayscale；
   2. 显式 grayscale 配置 → 不动（幂等，不误伤）；
   3. 显式 histogram_eq 配置 → 不动（保留用户显式选择的权利）。
 
+⚠️★ 为什么这里用「未选地图」的配置（bot.map = ""）：
+   自动纠正块在 load_config 的**地图分支之前**（这正是本修复的位置要求，
+   见 MapleStoryAutoLevelUp.py 的注释：地图未选时会提前 return，块放它
+   后面就执行不到 —— 这曾让本自检用例 1 挂掉）。
+   因此用空地图，load_config 在 "地图未选择，跳过地图加载" 处 return，
+   而纠正块**已经跑完** ⇒ 既能验到纠正结果，又完全不依赖：
+     · minimaps/<图>/  —— 仓库只跟踪 .gitkeep（挂机点位属个人数据）
+     · config_data.yaml —— .gitignore 忽略（仓库只有 .blank 空表）
+     · nametag/*.png    —— .gitignore 忽略（文件名即角色名）
+   这三样在 CI 检出后都不存在，所以本自检**必须**不碰它们。
+
 用法：
     python -m tools.verify_nametag_mode_fix
 '''
+import copy
 import sys
 
 from src.engine.MapleStoryAutoLevelUp import MapleStoryAutoBot
@@ -29,15 +41,6 @@ def check(name, got, want):
         FAIL.append(name)
 
 
-def merge(base, custom):
-    for k, v in custom.items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict):
-            merge(base[k], v)
-        else:
-            base[k] = v
-    return base
-
-
 def new_bot():
     import types
     args = types.SimpleNamespace(test_image="", is_ui=False, init_state="",
@@ -45,7 +48,7 @@ def new_bot():
     b = MapleStoryAutoBot.__new__(MapleStoryAutoBot)
     b.args = args
     b.cfg = None
-    b.data = load_yaml("config/config_data.yaml")
+    b.data = None
     b.monsters_info = {}
     b.img_routes = []
     b.img_route_home = None
@@ -64,17 +67,16 @@ def new_bot():
 
 
 def run_load(mode_in):
-    '''构造一个 nametag.mode=mode_in 的配置走完整 load_config，返回纠正后的 mode。'''
-    import copy
-    base = load_yaml("config/config_default.yaml")
-    cfg = copy.deepcopy(base)
+    '''构造 nametag.mode=mode_in 的配置跑 load_config，返回纠正后的 mode。
+
+    bot.map 留空（见模块 docstring）⇒ 只跑到地图分支的 return，
+    恰好覆盖到纠正块、且不触碰 CI 上不存在的资源。
+    '''
+    cfg = copy.deepcopy(load_yaml("config/config_default.yaml"))
     cfg["nametag"]["mode"] = mode_in
-    # load_config 用的 nametag 模板必须存在，用 Kumanya（仓库自带）
-    cfg["nametag"]["name"] = "Kumanya"
+    cfg["bot"]["map"] = ""
     b = new_bot()
-    ret = b.load_config(cfg)
-    if ret not in (None, 0):
-        raise RuntimeError(f"load_config 返回 {ret}")
+    b.load_config(cfg)
     return cfg["nametag"]["mode"]
 
 
@@ -92,13 +94,33 @@ def main():
     print("\n【3】显式 histogram_eq（用户显式选择）→ 不动")
     check("histogram_eq 保持不变", run_load("histogram_eq"), "histogram_eq")
 
+    # ── 【4】防重犯：出厂默认值本身必须是 grayscale ────────────────────────
+    #   为什么单独加这条：上面三条走的都是"显式指定 mode"，
+    #   而纠正块会把 white_mask 一律改成 grayscale ⇒ 就算有人把
+    #   config_default.yaml 的默认值改回 white_mask，上面三条**照样全绿**
+    #   —— 而那正是 v1.0.11 犯的错。所以必须直接盯住出厂默认值本身。
+    print("\n【4】出厂默认值必须是 grayscale（防 v1.0.11 式回归重犯）")
+    default_mode = load_yaml("config/config_default.yaml")["nametag"]["mode"]
+    check("config_default.yaml 的 nametag.mode", default_mode, "grayscale")
+
+    # ── 【5】防漏改：标定工具写入的 mode 也必须与默认一致 ─────────────────
+    #   v1.0.11 是"默认值 + 标定工具写入值"两处一起改坏的；
+    #   只把默认值改回来、漏改工具，用户重新标定一次就又被写坏。
+    print("\n【5】标定工具写入的 mode 必须与默认一致（防只改一处）")
+    import re
+    with open("tools/calibrate_nametag.py", "r", encoding="utf-8") as f:
+        cal_src = f.read()
+    m = re.search(r'nt\["mode"\]\s*=\s*["\'](\w+)["\']', cal_src)
+    cal_mode = m.group(1) if m else None
+    check("calibrate_nametag.py 写入的 mode", cal_mode, "grayscale")
+
     print("\n" + "=" * 60)
     if FAIL:
-        print(f"❌ 自检失败 {len(FAIL)} 项：")
+        print(f"[FAIL] 自检失败 {len(FAIL)} 项：")
         for n in FAIL:
             print(f"   - {n}")
         return 1
-    print("✅ 全部通过")
+    print("[OK] 全部通过")
     return 0
 
 
