@@ -78,6 +78,8 @@ jobs:
             'verify_attack_box_stale_pos',
             'verify_key_name_alias',
             'verify_mob_boxes',
+            'verify_mob_library',
+            'verify_mob_lib_ui',
             'verify_ci_green_check'
           )
           # ⚠️ 注意：tools/verify_nametag_fallback_limit.py **不进 CI** ——

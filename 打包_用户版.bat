@@ -49,7 +49,7 @@ if errorlevel 1 goto fail
 
 echo.
 echo [2/4] 建资源目录骨架...
-for %%D in (config nametag monster minimaps log media) do (
+for %%D in (config nametag monster minimaps log media monster_lib) do (
     if not exist "%OUT%\%%D" mkdir "%OUT%\%%D"
 )
 
@@ -61,6 +61,13 @@ copy /Y config\config_custom.yaml "%OUT%\config\" >nul
 copy /Y media\icon.ico "%OUT%\media\" >nul
 copy /Y media\icon.png "%OUT%\media\" >nul
 echo     - 只放出厂默认配置（不带任何个人设置与模板）
+echo     - 怪素材库 monster_lib\ 随包分发（用户选图后可直接勾选登记，免手抠）
+if exist monster_lib (
+    xcopy /Y /E /I /Q monster_lib "%OUT%\monster_lib" >nul
+    echo     - 已复制 monster_lib（现成怪物模板库）
+) else (
+    echo     [警告] 没找到 monster_lib\ —— 用户将无法从素材库选怪，只能自己截
+)
 
 echo.
 echo [4/4] 完成

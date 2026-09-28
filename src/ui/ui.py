@@ -1461,6 +1461,18 @@ class MainWindow(QMainWindow):
         self.btn_map_mobs.setEnabled(False)
         row.addWidget(self.btn_map_mobs)
 
+        # 📦 内置怪物素材库（2026-09-29）：随包附带一批官方素材转好的现成模板，
+        #    用户选完地图点一下就能把该图会出现的怪直接装好并登记，
+        #    **完全不用自己截**。这是「选图后没怪可用 → 不打怪」的正解。
+        self.btn_mob_lib = QPushButton("📦 从素材库选怪…")
+        self.btn_mob_lib.setToolTip(
+            "从随包附带的怪物素材库（国服官方素材）里挑怪。\n"
+            "选中会自动装好模板并登记到当前地图 —— 不用开游戏、不用自己截。\n"
+            "库里没有的怪，仍然可以用【截取怪物模板】自己截。")
+        self.btn_mob_lib.clicked.connect(self.register_from_library)
+        self.btn_mob_lib.setEnabled(False)
+        row.addWidget(self.btn_mob_lib)
+
         # 🗑️ 删除地图（2026-09-12 用户需求）：录坏的图一键清掉重录，
         #    不用去资源管理器里翻 minimaps/ 目录。
         self.btn_delete_map = QPushButton("🗑️ 删除这张地图…")
@@ -1756,10 +1768,49 @@ class MainWindow(QMainWindow):
             pass
 
     def _update_delete_btn(self):
-        '''没选中任何地图时禁用这几个按钮（避免点了没反应）。'''
+        '''按「地图列表当前有没有选中项」启用/禁用这几个按钮。
+
+        ★ 2026-09-29 修（用户实测：「选了地图，这三个按钮还是灰的，点了也没用」）
+
+        ── 为什么会灰（真机复现，见 tools/verify_map_buttons.py）─────────────
+        原来本方法只读 `self.selected_map`，而那个值**只在 on_map_selected 里赋值**，
+        两者分别挂在两个信号上，Qt 的触发顺序是：
+
+            ① itemSelectionChanged  →  本方法先跑（此刻 selected_map 还是旧值 ""）
+            ② itemClicked           →  on_map_selected 才赋值
+
+        ⇒ 第一次点击时本方法读到的仍是空串 → has=False → 三个按钮保持禁用；
+          而**不会有第二次机会**：再点同一行选区没变，itemSelectionChanged
+          不再发出 ⇒ 按钮**永远**灰着（用户点了没反应就是这么来的）。
+
+        ── 修法 ──────────────────────────────────────────────────────────────
+        不依赖"赋值是否已发生"，直接**问列表当前选中的是哪一项** —— 这样
+        点选 / 键盘上下键切换 / 程序化 setCurrentRow（如 refresh_map_list 恢复
+        选中）三种来源都能正确点亮。
+
+        ⚠️ 不要退回"只读 self.selected_map"的写法：那会重新引入信号顺序 bug。
+        ⚠️ 判定用 **`item.isSelected()`（QListWidgetItem 的方法）**，
+           不要写成 `self.list_widget_maps.isItemSelected(item)` —— QListWidget
+           **没有** isItemSelected 这个方法（实测 AttributeError）。
+        ⚠️ 仍要判一次选中态：`clearSelection()` 之后 `currentItem()` 仍非 None
+           （实测：clearSelection 后 item.isSelected()=False 但 currentItem 不空），
+           不判会把已清空选择当成有效选择、按钮误亮。
+        '''
+        item = self.list_widget_maps.currentItem()
+        if item is not None and item.isSelected():
+            # 与 on_map_selected 同一套解析口径：显示文本可能是 "id (中文名)"
+            self.selected_map = item.text().split(" (")[0]
+        else:
+            # ★ 必须**清掉**旧值：selection 被清空（clearSelection / 列表重建后
+            #   没有选中项）时，若沿用上一次的 selected_map，按钮会**误亮** ——
+            #   看起来选中了一张图，实际列表里啥都没选（自检 [6] 钉的正是这条）。
+            self.selected_map = ""
+
         has = bool(self.selected_map)
         self.btn_delete_map.setEnabled(has)
         self.btn_map_mobs.setEnabled(has)
+        if getattr(self, 'btn_mob_lib', None) is not None:
+            self.btn_mob_lib.setEnabled(has)
         if getattr(self, 'btn_draw_home', None) is not None:
             self.btn_draw_home.setEnabled(has)
 
@@ -2717,6 +2768,164 @@ class MainWindow(QMainWindow):
             return
         self._spawn_console(['tools.template_capture', '--name', name.strip(),
                              '--map', self.selected_map], pause=True)
+
+    def register_from_library(self):
+        '''📦 从内置素材库装怪并登记到当前地图（2026-09-29）。
+
+        用户选完地图 → 点这个 → 想让这张图打哪几种怪就勾哪几种 →
+        模板自动装进 monster/，同时登记进 map_mobs_mapping。
+
+        为什么要它：原流程要求用户「开游戏 → 找到怪 → 框住它」才能有模板，
+        而国服怀旧服怪种类多，用户不可能每种都截。素材库随包发一批现成的，
+        选图后勾一下就能开打 —— 这是「选图后不打怪」最常见的根因的解。
+        '''
+        map_name = getattr(self, 'selected_map', None)
+        if not map_name:
+            QMessageBox.information(self, "先选地图",
+                                    "请先在地图列表里点选要挂机的地图。")
+            return
+
+        try:
+            from src.utils.mob_library import load_index, installed_mobs
+        except Exception as e:
+            QMessageBox.warning(self, "素材库不可用", f"{e}")
+            return
+
+        index = load_index()
+        if not index:
+            QMessageBox.information(
+                self, "素材库是空的",
+                "没找到 monster_lib/ 里的素材。\n\n"
+                "你仍然可以用【截取怪物模板】自己截怪（截一次，所有图通用）。")
+            return
+
+        have = installed_mobs()
+
+        # 当前这张图已登记的（从磁盘重读，登记表可能被别的进程改过）
+        try:
+            import yaml as _yaml
+            from src.utils.registry import REG_PATH
+            with open(REG_PATH, "r", encoding="utf-8") as f:
+                data = _yaml.safe_load(f) or {}
+            registered = set((data.get("map_mobs_mapping", {}) or {}).get(map_name) or [])
+        except Exception:
+            registered = set()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"「{map_name}」从素材库选怪")
+        dlg.setMinimumWidth(500)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel(
+            f"勾选这张图会出现的怪（素材库 {len(index)} 种，按等级排序）：\n"
+            "· 已装好的会自动登记到这张图\n"
+            "· 没装过的会自动装好再登记\n"
+            "· 库里没有的怪，仍可用【截取怪物模板】自己截"))
+
+        # 搜索框：82 种怪滚动找太累，直接过滤
+        edit_filter = QLineEdit()
+        edit_filter.setPlaceholderText("输入怪名过滤（如：猪、蘑菇、Lv30）")
+        v.addWidget(edit_filter)
+
+        lw = QListWidget()
+        lw.setSelectionMode(QListWidget.MultiSelection)
+
+        def _lv_key(nm):
+            lv = (index.get(nm) or {}).get('level', '')
+            return (int(lv) if str(lv).isdigit() else 999, nm)
+
+        for name in sorted(index, key=_lv_key):
+            ent = index.get(name) or {}
+            lv = ent.get('level', '')
+            tip = '  [已装]' if name in have else ''
+            item = QListWidgetItem(f"Lv{lv:<4} {name}{tip}")
+            item.setData(Qt.UserRole, name)
+            lw.addItem(item)
+            item.setSelected(name in registered)
+        v.addWidget(lw)
+
+        def _apply_filter(text):
+            t = (text or '').strip().lower()
+            for i in range(lw.count()):
+                it = lw.item(i)
+                it.setHidden(bool(t) and t not in it.text().lower())
+
+        edit_filter.textChanged.connect(_apply_filter)
+
+        # 常用快捷：一键选中/取消「已装」的怪
+        row_btn = QHBoxLayout()
+        btn_sel_inst = QPushButton("只选已装的")
+        btn_clr = QPushButton("全部取消")
+
+        def _select_installed():
+            for i in range(lw.count()):
+                it = lw.item(i)
+                it.setSelected(it.data(Qt.UserRole) in have)
+
+        def _clear_all():
+            for i in range(lw.count()):
+                lw.item(i).setSelected(False)
+
+        btn_sel_inst.clicked.connect(_select_installed)
+        btn_clr.clicked.connect(_clear_all)
+        row_btn.addWidget(btn_sel_inst)
+        row_btn.addWidget(btn_clr)
+        row_btn.addStretch()
+        v.addLayout(row_btn)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        picked = {lw.item(i).data(Qt.UserRole) for i in range(lw.count())
+                  if lw.item(i).isSelected()}
+        if not picked:
+            QMessageBox.information(
+                self, "没勾选",
+                "至少勾一种怪 —— 一张都不勾的话引擎认不出怪，角色不会打。")
+            return
+
+        # 先装模板（装不上的直接跳过，不让整条登记失败）
+        from src.utils.mob_library import install
+        installed_now, failed = [], []
+        for m in sorted(picked):
+            try:
+                r = install(m)
+            except Exception:
+                r = 'missing'
+            if r == 'installed':
+                installed_now.append(m)
+            elif r == 'missing':
+                failed.append(m)
+
+        usable = sorted(picked - set(failed))
+        if not usable:
+            QMessageBox.warning(self, "都没装上",
+                                "选中的怪一个都没能装上，请检查 monster_lib/ 目录。")
+            return
+
+        try:
+            from src.utils.registry import register_map, register_mob, unregister_mob
+            register_map(map_name)
+            added = [m for m in usable if m not in registered
+                     and register_mob(map_name, m)]
+            removed = [m for m in registered - set(usable)
+                       if unregister_mob(map_name, m)]
+        except Exception as e:
+            QMessageBox.warning(self, "登记失败", f"{e}")
+            return
+
+        logger.info(f"[素材库登记] 「{map_name}」= {usable}"
+                    f"（新装 {installed_now}，新增登记 {added}，移除 {removed}）")
+        msg = f"「{map_name}」现在会打：{'、'.join(usable)}\n"
+        if installed_now:
+            msg += f"\n新装模板 {len(installed_now)} 种：{'、'.join(installed_now)}"
+        if failed:
+            msg += f"\n\n⚠️ 素材库里没有（已跳过）：{'、'.join(failed)}"
+        msg += "\n\n直接点开始即可。"
+        QMessageBox.information(self, "已登记", msg)
 
     def register_existing_mobs(self):
         '''
