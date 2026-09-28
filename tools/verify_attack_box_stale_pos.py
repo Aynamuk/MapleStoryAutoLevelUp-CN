@@ -187,11 +187,42 @@ def main():
           "stale_after_frames" not in _code, True)
 
     print()
+    print("===== 7. 名字匹配分数已落盘（issue #6 的定位抓手） =====")
+    # 为什么必须有：用户日志里只有二值的"名字命中True/False"，
+    #   **看不出"离阈值差多远"** —— 而"差一点点"（模板/阈值问题）和
+    #   "差很多"（名牌被挡/位置不对）病因完全不同。引擎原来把 score 丢了
+    #   （`_ = (score, ...)`），对比小地图定位是有存 score 的。
+    check("引擎里存了 nametag_score", "self.nametag_score" in _code, True)
+    check("维护了近段分数窗口（用于报最低分）",
+          "_nt_score_hist" in _code, True)
+    check("失败告警会打出「本帧分数 / 近段最低」",
+          "名字定位·分数" in _code and "近段最低" in _code, True)
+    _srcline = [ln for ln in _code.splitlines() if "_s = float(getattr(self, \"nametag_score\"" in ln]
+    check("   ⤷ 读分数时做了兜底（不硬取属性，Stub 也不崩）",
+          bool(_srcline) and "getattr" in _srcline[0], True)
+
+    # ⚠️ 决定性：这些埋点**绝不能参与判定**。判定的唯一依据仍是
+    #    `score < diff_thres`（见引擎里那句 if），下面的断言防止有人
+    #    日后拿 nametag_score / 窗口分去做阈值判断（那会改变行为）。
+    _judge = [ln for ln in _code.splitlines()
+              if ("nametag_score" in ln or "_nt_score_hist" in ln)
+              and ("if " in ln or "return" in ln)]
+    check("   ⤷ 分数埋点**没有**参与任何 if/return（纯观测）", _judge, [])
+
+    # ★ 空窗口的判定：没有分数时**不能**拿兜底值 -1.0 去比阈值 ——
+    #   那会落进"接近阈值"分支，把"压根没数据"误报成"差一点点"，正好把排查带偏。
+    check("   ⤷ 空窗口不会误报「接近阈值」（必须先判有没有数据）",
+          "_best = min(_h) if _h else -1.0" not in _code, True)
+    check("   ⤷ 空窗口有专门的说法（取不到匹配分数）",
+          "取不到匹配分数" in _code, True)
+
+    print()
     if FAIL:
         print(f"失败的用例（{len(FAIL)}）：{', '.join(FAIL)}")
         return 1
     print("全部通过：已钉死「位置过期 → 攻击框偏移」的事实链；"
-          "行为**未被改动**（停手闸门已回滚，阈值待真机标定）")
+          "行为**未被改动**（停手闸门已回滚，阈值待真机标定）；"
+          "名字匹配分数已作为观测抓手落盘")
     return 0
 
 

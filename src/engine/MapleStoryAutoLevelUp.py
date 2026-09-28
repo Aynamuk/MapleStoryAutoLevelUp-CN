@@ -1252,7 +1252,25 @@ class MapleStoryAutoBot:
         #   "NameTag,<score>,cached/missed,<type>[,fb]"
         # 按用户要求去掉（画面上只留 Attack Range + Mob Detection Box 两个框）。
         # 名字有没有匹配上、score 多少，看日志的 [运行状态]（里面带"名字命中/miss"计数）。
-        # 下面这几个变量仍保留计算，供日志与后续逻辑使用。
+        #
+        # ⚠️★ 2026-09-28 订正上面那句话：**[运行状态] 里其实没有 score**。
+        #    它只有二值的"名字命中True/False"和 miss 计数 —— 于是排查 issue #6 时
+        #    只能看出"没命中"，**看不出"离阈值差多远"**，而这两者的病因完全不同：
+        #       steadily 0.011（阈值 0.01）→ 模板/阈值问题，微调就好
+        #       0.3~0.8                      → 名牌被挡 / 位置根本不对
+        #    对比小地图定位：它的 score 是有存下来并显示的（self.minimap_score）。
+        #    ⇒ 现在把名字匹配的 score 也记下来（**纯观测，不参与任何判定**）。
+        self.nametag_score = score
+        self.nametag_used_fallback = bool(used_fallback)
+        # 记最近一段窗口的"最低分"：命中不了时，最低分最能说明"差多少"。
+        # （阈值比较用的是**这一次**的 score，窗口最低分只用于日志。）
+        _hist = getattr(self, "_nt_score_hist", None)
+        if _hist is None:
+            _hist = []
+            self._nt_score_hist = _hist
+        _hist.append(float(score))
+        if len(_hist) > 150:
+            del _hist[:-150]
         _ = (score, is_cached, tag_type, used_fallback)
 
         return loc_player
@@ -4444,6 +4462,37 @@ class MapleStoryAutoBot:
                     f"模板没标定好。\n"
                     f"        若长时间不恢复：① 先走到人少处 ② 重新标定名字模板"
                     f"（双击项目根的「标定名字标签.bat」）")
+                # ── 匹配分数量级（2026-09-28 加，issue #6 排查用）────────────
+                # 为什么必须打：光报"没命中"没法定位病因 —— 差一点点（模板/阈值问题）
+                #   和差很多（名牌被挡 / 位置不对）是**完全不同的两件事**，处理办法也不同。
+                #   这里给出「本帧分数 / 近段最低分」，一眼区分开。
+                # ⚠️ 与上面那条共用同一个 10 秒节流闸，不会刷屏、不影响帧率。
+                # ⚠️ 纯观测：不参与任何判定。
+                try:
+                    _s = float(getattr(self, "nametag_score", -1.0))
+                    _h = list(getattr(self, "_nt_score_hist", None) or [])
+                    # ⚠️ 没有分数时**不能**拿 -1.0 去比对 —— 那会落进"接近阈值"分支，
+                    #    把"压根没数据"误报成"差一点点"，正好把排查带偏（实测踩过）。
+                    #    所以分开判：有数据才给结论，没数据就直说。
+                    if _h:
+                        _best = min(_h)
+                        _near = _best < float(self.cfg["nametag"]["diff_thres"]) * 3
+                        _verdict = ("**非常接近阈值**，多半是阈值太紧或模板不够贴合"
+                                    if _near else
+                                    "**离阈值很远**，多半是名牌被挡住、或位置/模板根本不对")
+                        _body = f"本帧 {_s:.4f} / 近段最低 {_best:.4f}"
+                    else:
+                        _verdict = "**取不到匹配分数**（本次没有可用的匹配结果）"
+                        _body = f"本帧 {_s:.4f} / 近段最低 无数据"
+                    _th = float(self.cfg["nametag"]["diff_thres"])
+                    _tpl = self.cfg["nametag"].get("mode", "?")
+                    logger.warning(
+                        f"[名字定位·分数] {_body}"
+                        f"（阈值 {_th}，模式 {_tpl}）—— {_verdict}\n"
+                        f"        把这一行发给开发者即可定位。"
+                        f"（想看模板长什么样：工具箱「保存诊断包」）")
+                except Exception:                            # noqa: BLE001
+                    pass          # 观测代码绝不能影响主循环
 
         # Update player location
         if loc_player is not None:
