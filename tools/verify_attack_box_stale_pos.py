@@ -56,6 +56,9 @@ def make_stub(cfg, loc_player):
     s = S()
     s.get_attack_range = lambda is_left=True: MapleStoryAutoBot.get_attack_range(
         s, is_left=is_left)
+    # 同理：`update_cmd_by_mob_detection` 开头会调 `self._attack_pos_is_fresh()`，
+    # 也必须把真实方法绑上（绑的是引擎原方法，保证"测的就是跑的那份"）。
+    s._attack_pos_is_fresh = lambda: MapleStoryAutoBot._attack_pos_is_fresh(s)
     s.cfg = cfg
     s.loc_player = loc_player
     s.monsters = []
@@ -144,29 +147,100 @@ def main():
     print(f"       （实际最先失效的纵向偏差 = {min(losses) if losses else '未失效'}px）")
 
     print()
-    print("===== 4. 名字定位失效时**没有任何**降级/拒止（这就是缺陷本身） =====")
+    print("===== 5. 位置过期时的**行为**：暂停出招 + 分级告警 =====")
     import inspect
-    src = inspect.getsource(MapleStoryAutoBot.get_player_location_by_nametag)
-    check("匹配失败时不更新 loc_nametag（位置被冻住）",
-          "self.nametag_miss_streak += 1" in src, True)
-    check("  ⤷ 且不删除/复位 loc_nametag", "self.loc_nametag = None" not in src, True)
+    from src.engine.MapleStoryAutoLevelUp import MapleStoryAutoBot as B
+    src_gate = inspect.getsource(B._attack_pos_is_fresh)
 
-    src2 = inspect.getsource(MapleStoryAutoBot.update_cmd_by_mob_detection)
-    check("攻击判定**没有**检查 nametag 是否命中",
-          "nametag_hit" not in src2 and "nametag_miss_streak" not in src2, True)
-    src3 = inspect.getsource(MapleStoryAutoBot.get_nearest_monster)
-    check("攻击框计算**没有**检查 nametag 是否命中",
-          "nametag" not in src3, True)
+    st = make_stub(base_cfg(), (700, 400))
+    st.nametag_miss_streak = 0
+    check("刚命中（miss=0）→ 位置可信", B._attack_pos_is_fresh(st), True)
+
+    st.nametag_miss_streak = 29
+    check("miss=29（<30）→ 仍可信（不误伤短暂遮挡）", B._attack_pos_is_fresh(st), True)
+
+    st.nametag_miss_streak = 30
+    check("miss=30（=阈值）→ 判为过期", B._attack_pos_is_fresh(st), False)
+
+    st.nametag_miss_streak = 650
+    check("miss=650（issue #6 实测最长）→ 判为过期", B._attack_pos_is_fresh(st), False)
+
+    st.nametag_miss_streak = 5
+    st.cfg = dict(base_cfg())
+    st.cfg["nametag"] = {"stale_after_frames": 0}
+    check("configured 0 → 关掉本层（退回老行为）", B._attack_pos_is_fresh(st), True)
+
+    st.cfg = {"nametag": {"stale_after_frames": "abc"}}
+    check("填非法值 → 回落默认 30（不抛异常）", B._attack_pos_is_fresh(st), True)
+
+    class Bare:
+        pass
+    try:
+        r = B._attack_pos_is_fresh(Bare())
+        check("裸对象不抛异常（Stub 不走 __init__）", r, True)
+    except Exception as e:                       # noqa: BLE001
+        check(f"裸对象不抛异常（实际抛了 {type(e).__name__}）", False, True)
+
+    check("闸门在 update_cmd_by_mob_detection 最前面（算搜索框之前）",
+          "if not self._attack_pos_is_fresh():" in
+          inspect.getsource(B.update_cmd_by_mob_detection), True)
+    check("   ⤷ 暂停时会清掉残留 attack（不打空气）",
+          'if self.cmd_action == "attack":\n                self.cmd_action = "none"' in
+          inspect.getsource(B.update_cmd_by_mob_detection), True)
+    check("   ⤷ **不碰移动指令**（巡逻靠小地图全局坐标，与名字定位无关）",
+          "cmd_move_x = " not in
+          inspect.getsource(B.update_cmd_by_mob_detection).split("_attack_pos_is_fresh()")[1]
+          .split("Get monster search box")[0], True)
 
     print()
-    print("===== 5. 告警只报「一次都没命中过」，不报「命中过但已失效很久」 =====")
-    src4 = inspect.getsource(MapleStoryAutoBot)
-    check("存在 nametag_ever_hit 分支", "if not self.nametag_ever_hit:" in src4, True)
-    # 关键：命中过一次之后，哪怕连续 650 帧失效，也只打 warning（"影响有限"）
-    check("命中过再失效时，文案是「影响有限」",
-          "位置沿用上次命中的结果 —— 同图内角色屏幕位置基本不动，影响有限" in src4, True)
-    check("  ⤷ 该文案对「攻击框用过期坐标」这个真实危害没有任何提示",
-          "攻击框" not in src4.split("影响有限")[0][-400:], True)
+    print("===== 5b. 位置过期对「选方向」的影响（issue #6 第 3 位用户） =====")
+    # `get_attack_direction` 用 self.loc_player[0] 判断"怪在角色左边还是右边"
+    # （见引擎 is_monster_on_correct_side）。位置一过期，这个左右判断的**基准**就错了。
+    #
+    # ⚠️ 实测结论（本用例两次实证，纠正一个想当然的判断）：
+    #    位置过期**不会**让引擎"朝反方向出招" —— 因为 is_monster_on_correct_side
+    #    会发现"怪不在我这一侧"从而返回 None，只是**不出招**。
+    #    所以「左右不分」不是这条路径直接造成的；这条只解释「不打怪」。
+    mon_left = {"name": "m", "position": (500, 380), "size": (40, 40), "score": 0.1}
+    st = make_stub(base_cfg(), (700, 400))
+    st.monsters = [mon_left]
+    st.monsters_info = {"m": [(np.zeros((40, 40, 3), np.uint8), None)]}
+    d = B.get_attack_direction(st, mon_left, None)
+    check("位置新鲜：怪在左边 → 判 left（正确）", d, "left")
+
+    st.loc_player = (100, 400)          # 位置过期到怪的右边
+    d = B.get_attack_direction(st, mon_left, None)
+    check("位置过期：同一只怪 → 返回 None（**不是**反向出招）", d, None)
+
+    # 真正会发生的是：闸门让引擎**在选方向之前就 return** ⇒ 下面这条路径走不到。
+    st = make_stub(base_cfg(), (100, 400))
+    st.monsters = [mon_left]
+    st.monsters_info = {"m": [(np.zeros((40, 40, 3), np.uint8), None)]}
+    st.cmd_action = "attack"          # 预置残留，验证被清掉
+    st.nametag_miss_streak = 650
+    st.t_last_attack = 0.0
+    st.cfg = dict(base_cfg())
+    st.cfg["nametag"] = {"stale_after_frames": 30}
+    st.img_frame = np.zeros((680, 768, 3), np.uint8)
+    B.update_cmd_by_mob_detection(st)
+    check("位置过期 → 不出招（残留 attack 被清）", st.cmd_action, "none")
+    check("   ⤷ 也没给任何方向指令（不会左右乱窜）", st.cmd_move_x, "none")
+
+    src_all = inspect.getsource(B)
+    # ⚠️ 断言只能查**真的会打出去的日志串**，不能扫全文 ——
+    #    源码里为说明"改了什么、为什么改"，在注释和 docstring 里**引用**了旧文案，
+    #    按整篇匹配会把它们也算进去、造成假失败（本用例前两版都这么挂的：
+    #    第一版漏了注释、第二版只过滤 `#` 行，漏了跨行 docstring —— 见 :4038）。
+    #    做法：只看**日志调用真正传进去的 f-string 字面量**。
+    import re as _re
+    _logged = " ".join(_re.findall(r'logger\.\w+\(\s*((?:f?)"[^"]*"(?:\s*(?:f?)"[^"]*")*)',
+                                   src_all, _re.S))
+    check("打出去的日志里不再有「屏幕位置基本不动，影响有限」",
+          "影响有限" not in _logged, True)
+    check("打出去的日志里有分级后的「打怪判定暂停」",
+          "打怪判定暂停" in _logged, True)
+    check("   ⤷ 且保留未超阈值时的「暂未影响打怪」分支",
+          "暂未影响打怪" in _logged, True)
 
     print()
     if FAIL:
