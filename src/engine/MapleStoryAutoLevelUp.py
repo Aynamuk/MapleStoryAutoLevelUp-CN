@@ -1772,18 +1772,12 @@ class MapleStoryAutoBot:
                     "score": 1.0,
                 })
 
-        # Debug
-        # Draw attack detection range
-        draw_rectangle(
-            self.img_frame_debug, (x0, y0), (y1-y0, x1-x0),
-            (255, 0, 0), "索敌范围"
-        )
-
-        # 2026-09-12：原来这里会给每个检测到的怪画一个小框
-        # （黄=血条检出、绿=模板检出），按用户要求去掉
-        # （画面上只留 Attack Range 红框 + Mob Detection Box 蓝框两个框）。
-        # 检测到几只怪，看日志的 [运行状态]（每 5 秒一条，含 "怪<N>"）。
-
+        # ── 索敌范围框 + 逐怪框都**不在**这里画了（2026-09-29）────────────
+        # 两个框都已挪到帧尾的 update_info_on_img_frame_debug，**每帧重画**。
+        # 原因：本函数被**降频**调用（every_n_frames 默认 2，见 monster_detect_interval），
+        #      而 img_frame_debug 在 run_once 开头**每帧都被清空重建**
+        #      ⇒ 不画的那帧框整个消失 = 用户看到的「疯狂闪烁」。
+        # ⚠️ 别挪回来！自检 tools/verify_mob_boxes.py 的 [4b]/[6] 会立刻报错。
         return monsters
 
     def get_img_frame(self):
@@ -2109,13 +2103,24 @@ class MapleStoryAutoBot:
         '''
         update_info_on_img_frame_debug
         '''
-        # ── 2026-09-12 按用户要求精简画面 ────────────────────────────────
+        # ── 2026-09-12 精简画面 ──────────────────────────────────────────
         # 这里原本有一组左下角文字（FPS / State / Resolution / 按键提示），现已去掉。
-        # 现在画面上**只保留两个框**：
-        #   红框 "Attack Range"        = 攻击范围（技能能打到的矩形）
-        #   蓝框 "Mob Detection Box"   = 怪物检测搜索区（引擎只在这个矩形内找怪）
-        # 其余标注（Route Action / Route Index / Cmd / minimap 红框 / 怪物小框）
-        # 也一并去掉，保持画面干净。
+        # 现在画面上有**三种框**（2026-09-29 起）：
+        #   红框 "攻击范围"   = 攻击范围（技能能打到的矩形）
+        #   红框 "索敌范围"   = 怪物检测搜索区（引擎在这个矩形内找怪）★09-29 挪到这里
+        #   绿/黄 逐怪小框     = 每只识别到的怪（绿=模板检出、黄=血条检出）★09-29 加回
+        # 其余标注（Route Action / Route Index / Cmd / minimap 红框）已去掉。
+        #
+        # ★ 这三种框**都必须在本方法里画（帧尾、每帧都到）**，不能放进按帧降频的
+        #   get_monsters_in_range —— 否则会「不画的那帧框消失」= 疯狂闪烁。
+        #   详见下面各自的注释。
+        #
+        # ★ 2026-09-29 更正：这段注释原来写的是「怪物小框也一并去掉，保持画面干净」，
+        #   但**用户从没要求删掉逐怪小框** —— 他当时只要求把两个框的英文标签改成中文。
+        #   逐怪小框在初始提交 68118f7 里就已是注释状态，git 查不到任何删除记录。
+        #   ⇒ 现已按 `monster_detect.draw_mob_boxes` 开关加回（**默认 True**，见
+        #     get_monsters_in_range 里的实现）。不想要框的把它设成 false 即可。
+        #
         # ⚠️ 这些运行信息并没有丢：日志里主循环每 5 秒一条 [运行状态]
         #    （帧号/小地图/全局坐标/段号/指令/怪数/名字命中），排查照旧。
         # 注：`self.fps` 仍在这里更新，其它地方/日志可能会读。
@@ -2142,6 +2147,101 @@ class MapleStoryAutoBot:
                 (y1-y0, x1-x0),
                 (0, 0, 255), "攻击范围(右)"
             )
+
+        # ── 逐怪画框（2026-09-29 加回，**默认开**）─────────────────────────────
+        # 历史澄清：以前 get_monsters_in_range 里有句注释说「原来给每只怪画小框，
+        # 按用户要求去掉」。用户 2026-09-29 明确澄清：**他当时只要求把两个框的
+        # 英文标签改成中文，从没要求删掉逐怪小框**。那句注释是记错的
+        # （git 里也查不到删除记录 —— 初始提交 68118f7 起就已是注释状态）。
+        #
+        # 两个作用：
+        #   ① 用户肉眼判断「引擎到底看见没看见」，这是排查漏检的唯一抓手；
+        #   ② 出问题时能一眼区分**漏检**（怪没框）还是**下游不打**（有框不出招）。
+        #
+        # ⚠️⚠️ 为什么画在**这里**（帧尾、每帧都到）而不是怪检测内部 ——
+        #    这是治「框疯狂闪烁」的关键，别挪回去！
+        #
+        #    第一版把它放在 get_monsters_in_range 里（= 怪检测刚跑完那帧）。
+        #    理由听着对（框和 self.monsters 同一批数据），但**结果是闪烁**：
+        #    怪检测**降频**（every_n_frames 默认 2，见 monster_detect_interval），
+        #    所以它每 2 帧才画一次；而 img_frame_debug 在 run_once 开头**每帧都被
+        #    丢弃重建**（self.img_frame.copy()）⇒ 不画的那帧框整个消失。
+        #
+        #    ★ 实证反例（用户 2026-09-29 提问点破）：**「攻击范围框」从不闪烁**,
+        #      它同样画在这张每帧重建的图上 —— 差别是它**每帧都重画**。
+        #      ⇒ 结论：**「每帧清空」本身不导致闪烁**（攻击范围框就是活反例），
+        #        真因是「**画框频率(每2帧) < 清空频率(每帧)**」。
+        #        所以修法不是去改 img_frame_debug 的生命周期，而是**对齐画框频率**。
+        #
+        #    ⚠️ 副作用（已知并接受，用户 2026-09-29 确认"拖后一帧没事"）：
+        #      降频下中间帧用的 self.monsters 是**上一次检测**的结果，所以框的
+        #      位置会比怪**慢半拍**。滞后量级（真机实测帧率 1.8~2fps 反推）：
+        #        最快 ~50ms（中间帧）／平均 ~300ms／最坏 ~600ms（两次检测之间）。
+        #      排查漏检时看的是「怪身上**有没有**框」，不是「框跟得多准」，
+        #      慢半拍不影响判断 —— 比整个框一闪一闪没法看强得多。
+        #
+        # ⚠️ 画在 self.img_frame_debug 上，**不碰 self.img_frame** —— 识别用的是
+        #    后者，画框不会污染任何颜色/模板判据（见 run_once 里的同款注释）。
+        if self.img_frame_debug is not None and \
+                (self.cfg.get("monster_detect", {}) or {}).get("draw_mob_boxes", False):
+            # getattr 兜底：离线用例里的 Stub 不走 __init__，可能没有这个属性
+            for _mk in (getattr(self, "monsters", None) or []):
+                try:
+                    _mx, _my = _mk["position"]
+                    _mw, _mh = _mk["size"]
+                    # 尺寸防御：模板尺寸异常时不画（画出来是个巨型框，更迷惑）
+                    if not (0 < _mw < self.img_frame_debug.shape[1] and
+                            0 < _mh < self.img_frame_debug.shape[0]):
+                        continue
+                    _is_hp = (_mk.get("name") == "Health Bar")
+                    # 黄 = 血条检出，绿 = 模板检出（沿用上游原版的配色约定）
+                    _color = (0, 255, 255) if _is_hp else (0, 255, 0)
+                    # 不写文字：中文标签要过 PIL（实测 ≈0.1ms/次），
+                    # 误报多时一帧几十个框会明显拖帧。框本身（cv2.rectangle）
+                    # 只改几十个像素，开销可忽略 —— 所以只画框、不写字。
+                    cv2.rectangle(
+                        self.img_frame_debug,
+                        (max(0, _mx), max(0, _my)),
+                        (max(0, _mx + _mw), max(0, _my + _mh)),
+                        _color, 2)
+                except Exception:                            # noqa: BLE001
+                    # 画框是纯观测，绝不允许把主循环带崩（同 _perf 的纪律）
+                    continue
+
+        # ── 索敌范围框（2026-09-29 从怪检测内部挪到这里，治闪烁）──────────────
+        # 治的是用户「识别框疯狂闪烁」——原来它画在 get_monsters_in_range 里，
+        # 而那个函数**被降频调用**（every_n_frames 默认 2）⇒ 每 2 帧才画一次；
+        # 但 img_frame_debug 每帧都被清空重建 ⇒ 不画的那帧框整个消失 = 闪。
+        # ⇒ 挪到帧尾（每帧都到），与「攻击范围框」「逐怪框」同处，**每帧重画**。
+        #
+        # ⚠️ 这里**重算**一遍框，不从怪检测那边"传出来"：
+        #    搜索框纯粹由 loc_player + 配置（range/margin）算出，是**纯函数**，
+        #    没有随机性也没有跨帧状态（见 update_cmd_by_mob_detection 的算法）。
+        #    所以重算的结果与怪检测那帧用的框**完全一致**，不必额外存字段
+        #    （存字段反而多一处要维护的跨帧状态，容易忘清）。
+        # ⚠️ 已知副作用（与逐怪框同性质、同样接受）：降频下中间帧 loc_player 可能
+        #    滞后一帧，框会慢半拍（~50ms 最快／~300ms 平均／~600ms 最坏，见上）。
+        #    但**不闪**远比"绝对实时"重要 —— 闪的框根本没法看。
+        if self.img_frame_debug is not None and \
+                (self.cfg.get("monster_detect", {}) or {}).get("draw_mob_boxes", False):
+            try:
+                _md = self.cfg["monster_detect"]
+                _margin = _md["search_box_margin"]
+                if self.cfg["bot"]["attack"] == "aoe_skill":
+                    _dx = self.cfg["aoe_skill"]["range_x"] // 2 + _margin
+                    _dy = self.cfg["aoe_skill"]["range_y"] // 2 + _margin
+                else:
+                    _dx = self.cfg["directional_attack"]["range_x"] + _margin
+                    _dy = self.cfg["directional_attack"]["range_y"] + _margin
+                _h_f, _w_f = self.img_frame_debug.shape[:2]
+                _sx0 = max(0, self.loc_player[0] - _dx)
+                _sx1 = min(_w_f, self.loc_player[0] + _dx)
+                _sy0 = max(0, self.loc_player[1] - _dy)
+                _sy1 = min(_h_f, self.loc_player[1] + _dy)
+                cv2.rectangle(self.img_frame_debug,
+                              (_sx0, _sy0), (_sx1, _sy1), (255, 0, 0), 2)
+            except Exception:                                # noqa: BLE001
+                pass        # 纯观测，绝不允许把主循环带崩
 
         # 2026-09-12：原来这里会在游戏画面上画一个 "minimap" 红框标出小地图位置，
         # 按用户要求去掉（画面上只留 Attack Range + Mob Detection Box 两个框）。
