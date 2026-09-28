@@ -75,6 +75,7 @@ jobs:
             'verify_capture_border_fallback',
             'verify_nametag_mode_fix',
             'verify_goal_unreachable_warn',
+            'verify_attack_box_stale_pos',
             'verify_ci_green_check'
           )
           # ⚠️ 注意：tools/verify_nametag_fallback_limit.py **不进 CI** ——
