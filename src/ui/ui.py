@@ -1061,6 +1061,14 @@ class MainWindow(QMainWindow):
     def _launch_diagnose(self):
         self._spawn_console('tools.diagnose', pause=True)
 
+    def _launch_diagnose_nopic(self):
+        '''不含游戏画面的诊断包（见工具箱里那个按钮的说明）。
+
+        `--frames 0` 让 tools/diagnose.py 跳过现场抓帧、也不收 debug/ 里的旧帧，
+        只收「日志 + 配置 + 名字/怪物模板」。
+        '''
+        self._spawn_console(['tools.diagnose', '--frames', '0'], pause=True)
+
     def _launch_mob_template_qa(self):
         self._spawn_console('tools.mob_template_qa', pause=True)
 
@@ -1193,6 +1201,19 @@ class MainWindow(QMainWindow):
             "整个目录发给 AI 排查")
         btn_diag.clicked.connect(self._launch_diagnose)
         diag_layout.addWidget(btn_diag)
+        # ★ 2026-09-28 加：**不含画面**的诊断包。
+        #   为什么需要：诊断包默认会把**游戏画面**收进去，而画面里有角色名 ——
+        #   有些用户不愿意把自己的角色名/画面发出来（issue #6 那位明确说了
+        #   「无法提供涉及角色名的截图」）。原来只能靠
+        #   `python -m tools.diagnose --frames 0` 这种命令行做法，但**普通用户
+        #   不会敲命令**（也不该为了反馈问题去学命令行）⇒ 给一个按钮。
+        #   ⚠️ 代价写在按钮上：没有画面，收件人只能靠模板推断"名牌有没有被挡住"，
+        #      定位会慢一些 —— 让用户自己权衡，不替他决定。
+        btn_diag_nopic = QPushButton(
+            "保存诊断包（不含游戏画面）—— 只收日志 / 配置 / 模板\n"
+            "适合不方便把游戏画面发出来的情况（定位会慢一些）")
+        btn_diag_nopic.clicked.connect(self._launch_diagnose_nopic)
+        diag_layout.addWidget(btn_diag_nopic)
         layout.addWidget(gbox_diag)
 
         layout.addStretch(1)
