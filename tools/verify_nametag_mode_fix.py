@@ -26,12 +26,40 @@
     python -m tools.verify_nametag_mode_fix
 '''
 import copy
+import os
+import shutil
 import sys
 
 from src.engine.MapleStoryAutoLevelUp import MapleStoryAutoBot
 from src.utils.common import load_yaml
 
 FAIL = []
+
+# CI 上没有 config/config_data.yaml（.gitignore 忽略，仓库只有 .blank 空表），
+# 而 load_config 在 L667 会无条件 load_yaml 它（在地图名判空**之前**）。
+# 所以本自检在文件缺失时用 .blank 临时顶一份，跑完删除。
+# ⚠️ 本地已存在时**绝不覆盖** —— 那是用户真实的地图登记表。
+DATA_YAML = "config/config_data.yaml"
+DATA_BLANK = "config/config_data.blank.yaml"
+_tmp_data_created = False
+
+
+def ensure_data_yaml():
+    '''保证 config_data.yaml 存在；不存在就从 .blank 复制一份（记下以便清理）。'''
+    global _tmp_data_created
+    if os.path.exists(DATA_YAML):
+        return False
+    if not os.path.exists(DATA_BLANK):
+        raise RuntimeError(f"{DATA_YAML} 与 {DATA_BLANK} 都不存在，无法构造自检环境")
+    shutil.copyfile(DATA_BLANK, DATA_YAML)
+    _tmp_data_created = True
+    return True
+
+
+def cleanup_data_yaml():
+    '''只删掉本自检自己复制出来的那份（不碰用户原有的）。'''
+    if _tmp_data_created and os.path.exists(DATA_YAML):
+        os.remove(DATA_YAML)
 
 
 def check(name, got, want):
@@ -85,6 +113,25 @@ def main():
     print(" white_mask 存量配置自动纠正 自检")
     print("=" * 60)
 
+    made = ensure_data_yaml()
+    if made:
+        print(f" [准备] {DATA_YAML} 不存在（CI 环境），已用 {DATA_BLANK} 临时顶替")
+    try:
+        run_checks()
+    finally:
+        cleanup_data_yaml()
+
+    print("\n" + "=" * 60)
+    if FAIL:
+        print(f"[FAIL] 自检失败 {len(FAIL)} 项：")
+        for n in FAIL:
+            print(f"   - {n}")
+        return 1
+    print("[OK] 全部通过")
+    return 0
+
+
+def run_checks():
     print("\n【1】存量 white_mask（v1.0.11 期间标定的用户配置）→ 自动纠正")
     check("white_mask 被纠正为 grayscale", run_load("white_mask"), "grayscale")
 
@@ -113,15 +160,6 @@ def main():
     m = re.search(r'nt\["mode"\]\s*=\s*["\'](\w+)["\']', cal_src)
     cal_mode = m.group(1) if m else None
     check("calibrate_nametag.py 写入的 mode", cal_mode, "grayscale")
-
-    print("\n" + "=" * 60)
-    if FAIL:
-        print(f"[FAIL] 自检失败 {len(FAIL)} 项：")
-        for n in FAIL:
-            print(f"   - {n}")
-        return 1
-    print("[OK] 全部通过")
-    return 0
 
 
 if __name__ == "__main__":
