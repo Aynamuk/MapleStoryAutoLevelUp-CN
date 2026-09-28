@@ -44,8 +44,16 @@ import zipfile
 ALWAYS_REPLACE = ["冒险岛自动练级.exe"]
 
 # 补丁包里**永不包含**的东西：用户自己的数据，覆盖会毁掉他的配置和路线。
+#
+# ⚠️ monster_lib/ **不在此列**（2026-09-29）：它是随包分发的**资源**，
+#    不是用户数据 —— 里面是官方素材转好的现成怪物模板，新版加了怪就得跟着更新。
+#    用户的**自有**模板在 monster/ 下（已列在这里），两者是不同目录，不会互相影响。
 NEVER_INCLUDE = ("log/", "minimaps/", "monster/", "nametag/",
                  "config/config_custom.yaml", "config/config_data.yaml")
+
+# 随包分发的**资源目录**：源码里变了就整体带进补丁（不是用户数据，可以覆盖）。
+# 与 NEVER_INCLUDE 互斥 —— 别把同一个目录两边都写。
+SHIPPED_RESOURCE_DIRS = ("monster_lib/",)
 
 UTF8_FLAG = 0x0800
 
@@ -172,6 +180,30 @@ def make_patch(from_tag, to_tag, dist_dir, out_zip, cwd, universal=False):
             if os.path.isfile(p):
                 entries.append((f"config/{base}", p))
 
+    # ── 随包分发的**资源目录**（2026-09-29 加）────────────────────────
+    # 背景：v1.1.0 起内置了 monster_lib/（现成怪物素材库）。老用户打增量补丁时
+    # 必须**也拿到这个目录**，否则补丁装完 exe 是新的、素材库却不存在，
+    # 点【从素材库选怪】会报"素材库是空的"——功能静默缺失。
+    #
+    # ⚠️ 与 NEVER_INCLUDE 的区别：那些是**用户自己产出的数据**（他的模板/路线/配置），
+    #    覆盖会毁掉他的心血；这里是**随包发的资源**，新版本就该覆盖成新的。
+    #    两者目录不同（monster/ vs monster_lib/），不会互相影响。
+    for res_dir in SHIPPED_RESOURCE_DIRS:
+        prefix = res_dir.rstrip("/") + "/"
+        touched = [f for f in files if f.startswith(prefix)]
+        if not touched:
+            continue
+        src_root = os.path.join(dist_dir, res_dir.rstrip("/"))
+        if not os.path.isdir(src_root):
+            raise SystemExit(
+                f"[错误] 源码里 {res_dir} 有变化，但打包产物里找不到它：{src_root}\n"
+                f"       先重新打包（打包_用户版.bat）再生成补丁。")
+        for root, _dirs, fnames in os.walk(src_root):
+            for fn in fnames:
+                abs_p = os.path.join(root, fn)
+                rel = os.path.relpath(abs_p, dist_dir).replace(os.sep, "/")
+                entries.append((rel, abs_p))
+
     # 去重
     seen, uniq = set(), []
     for rel, p in entries:
@@ -179,6 +211,15 @@ def make_patch(from_tag, to_tag, dist_dir, out_zip, cwd, universal=False):
             seen.add(rel)
             uniq.append((rel, p))
     entries = uniq
+
+    # ---- 门禁：SHIPPED_RESOURCE_DIRS 与 NEVER_INCLUDE 不得重叠 ----
+    # 两者语义相反（前者必须覆盖、后者绝不覆盖），同时命中会悄悄毁掉用户数据。
+    for rd in SHIPPED_RESOURCE_DIRS:
+        for never in NEVER_INCLUDE:
+            if rd.rstrip("/") == never.rstrip("/"):
+                raise SystemExit(
+                    f"[错误] {rd} 同时出现在 SHIPPED_RESOURCE_DIRS 和 "
+                    f"NEVER_INCLUDE 里 —— 语义冲突，请二选一。")
 
     # ---- 写 zip ----
     if os.path.exists(out_zip):
