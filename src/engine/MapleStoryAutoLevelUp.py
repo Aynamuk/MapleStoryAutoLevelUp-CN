@@ -1821,6 +1821,21 @@ class MapleStoryAutoBot:
             self.t_watch_dog = time.time()
             return False
 
+        # ── 路线卡在够不着的**终点**上 → 不算「角色卡死」，算「路线/录制问题」（2026-09-28 加）
+        # 背景（issue #6 真机现场，废都南方工地）：route1 的终点 goal 在 **y=90~94 的高台**上，
+        #   角色在地面 y=116 来回走，**永远上不去**。此时：
+        #     · 位置每帧都在变 → `dx+dy > range` 频繁成立 → 看门狗**不会**报卡死；
+        #     · 但它其实已经空转很久（用户日志：3 分钟只在同一条地面线上往返 4 趟）。
+        #   ⇒ 用户看到的是「一直在走、但不跳也不打怪」，而系统一声不吭。
+        #   这里补一条**只告警、不改行为**的判据：同一段内连续 N 帧没能切段、
+        #   且角色 y 始终没接近本段终点 y ⇒ 打一条说明"终点够不着"的日志。
+        #   ⚠️ 为什么只告警不脱困：脱困会给随机动作，而这类地形的真因是
+        #      **路线画错了**（终点画在跳不上去的高度 / 缺跳跃像素），
+        #      乱动只会把角色踹下平台 —— 与 `on_stuck: alert` 的既定取舍一致。
+        self._warn_unreachable_goal()
+
+        current_time = time.time()
+
         current_time = time.time()
         if dx + dy > self.cfg["watchdog"]["range"]:
             # Player moved, reset watchdog timer
@@ -1838,6 +1853,88 @@ class MapleStoryAutoBot:
             logger.warning(f"[is_player_stuck] Player stuck for {self.stuck_seconds} seconds.")
             return True
         return False
+
+    def _warn_unreachable_goal(self):
+        '''本段终点**高度上够不着**时，打一条"路线画错了"的告警（**纯观测**）。
+
+        治的是什么（issue #6，2026-09-28 真机现场）：
+            用户在「废都南方工地」录的两段路线，段0 的 goal 画在 **y=90~94 的高台**上，
+            而角色一直在地面 y=116 上往返 —— 它**从来没有爬上去过**。
+            表现就是用户报的「不跳、不打怪、只在一条线上来回走」。
+
+        为什么现有的看门狗抓不到：
+            `is_player_stuck` 看的是"位置有没有变"。这里角色**一直在动**
+            （每 3~5 秒就往返一趟），`dx+dy > range` 频繁成立 ⇒ 永不判卡死 ⇒ 静默空转。
+
+        判据（三条同时满足才报）：
+            ① 不在回正状态（回正有自己的日志）；
+            ② 有本段终点，且**高度差始终没收敛**（连续帧数超过阈值）；
+            ③ 期间发生过切段（说明确实在来回走，而不是真的站着不动）。
+        ⇒ 报一条 error 级日志，**明确告诉用户是路线的问题、怎么修**，不做任何脱困动作。
+
+        ⚠️ 纯观测：只改计数器与日志，不碰 cmd_* / idx_routes / 任何判定。
+        ⚠️ 所有状态一律 getattr 兜底、复位也**内联**不调其它方法：
+           自检的 Stub **不走 __init__**（既有纪律，踩过坑 —— 调 self._xxx() 会
+           因为 Stub 上没绑该方法而 AttributeError，把整条自检带崩）。
+        '''
+        def _reset():
+            self._unreach_frames = 0
+            self._unreach_seg = getattr(self, "idx_routes", None)
+
+        if getattr(self, "is_using_home_route", False):
+            _reset()
+            return
+        goals = getattr(self, "_seg_goals", None) or []
+        i = getattr(self, "idx_routes", 0)
+        if not goals or not (0 <= i < len(goals)) or goals[i] is None:
+            _reset()
+            return
+        gx, gy = goals[i]
+        pos = getattr(self, "loc_player_global", None)
+        if not pos:
+            return
+        # ⚠️ 读法与 route 其它处一致：**缺键 → 默认 3**；但显式填 0 是
+        #    "关掉高度判据"（见 config_default.yaml 的 goal_reach_y_tol 说明），
+        #    必须真的不告警 —— 所以**不能**写成 `... or 3`：
+        #    那样 0 会被当成假值吞掉、回落 3，等于"想关关不掉"。
+        #    （本自检的用例 5 正是钉这条，第一次就抓到了这个错。）
+        _raw = self.cfg.get("route", {}).get("goal_reach_y_tol", 3)
+        try:
+            tol = 3 if _raw is None else int(_raw)
+        except (TypeError, ValueError, AttributeError):
+            tol = 3
+        if tol <= 0:
+            _reset()
+            return                       # 关掉高度判据 = 这条告警也无从判起
+
+        # 进入"够不着"的观察：|人y - 终点y| 一直大于容差
+        if abs(int(pos[1]) - int(gy)) > tol:
+            n = int(getattr(self, "_unreach_frames", 0) or 0) + 1
+            self._unreach_frames = n
+            seg = getattr(self, "_unreach_seg", None)
+            if seg != i:
+                # 换了段 → 重新开始观察（不同段的终点高度本来就不同）
+                self._unreach_seg = i
+                self._unreach_frames = 1
+                n = 1
+            # 阈值：按 30fps 算，约 60 秒还没够到就报（比 watchog.timeout 宽得多，
+            # 因为爬梯 + 打怪 + 被撞飞本来就要花时间）
+            if n == 180:
+                logger.error(
+                    f"[路线够不着] 本段(第 {i + 1}/{len(goals)} 段)的终点在 "
+                    f"y={gy}，而角色一直在 y={int(pos[1])}（高度差 "
+                    f"{abs(int(pos[1]) - int(gy))}px > 容差 {tol}px），"
+                    f"已经连续 {n} 帧（约 {n // 30} 秒）没能靠近。\n"
+                    f"        角色会一直在这条路上来回走、既不跳也不打怪 —— "
+                    f"**这不是卡死，是这段路线画得够不着**。\n"
+                    f"        怎么修（任选其一）：\n"
+                    f"          ① 重录这一条路线：走到那个高台上再按 F6 收尾，"
+                    f"让终点落在**人真站得到**的位置；\n"
+                    f"          ② 检查从地面到高台的**跳跃/爬梯像素有没有录进去**"
+                    f"（录制时跳一下才会记下跳跃点）；\n"
+                    f"          ③ 该高台本来就不用去 → 重录时把终点画在地面这一层。")
+        else:
+            _reset()
 
     def handle_stuck(self):
         '''判定卡死后**做什么** —— 唯一入口（2026-09-15 加）。
@@ -3807,6 +3904,24 @@ class MapleStoryAutoBot:
                 # 还没和梯子对齐 → 先走过去（保留方向，去掉跳跃）
                 self.cmd_move_x, self.cmd_move_y, self.cmd_action = _cc_cmd.split()
                 self.cmd_action = "none"
+                # ── 埋点：跳跃被"还没对齐"挡掉（2026-09-28 加，纯观测）──────────
+                # 为什么必须有：这一层会把跳跃**静默**吞掉（cmd_action 直接变 none，
+                # 键盘层根本走不到 jump 分支 ⇒ 连「跳跃冷却挡住」那条日志都不会有）。
+                # 于是"角色踩在跳跃像素上却不跳"在日志里**完全没有痕迹** ——
+                # issue #6 用户报的「不跳」就卡在这个盲区上。
+                # 这里只累计 + 节流告警；累计到阈值说明"一直没对齐"，
+                # 多半是跳跃点离梯子太远（录制问题），给出可操作提示。
+                _n = int(getattr(self, "_jump_align_suppress", 0) or 0) + 1
+                self._jump_align_suppress = _n
+                if _n == 90 and jump_trace_on(self.cfg):
+                    _dxg = abs(int(_lad_px[0]) - int(self.loc_player_global[0]))
+                    logger.warning(
+                        f"[跳跃被挡] 踩在跳跃像素上、但和梯子的横向还差 "
+                        f"{_dxg}px（容差 {_jtol}px）—— 已经连续 {_n} 帧"
+                        f"「只走不跳」。\n"
+                        f"        若角色一直走不到梯子正下方，就会**永远不跳**。\n"
+                        f"        怎么修：把跳跃点录得离梯子更近一点（重录时贴着梯子按跳），"
+                        f"或放宽 route.jump_align_tol（当前 {_jtol}，填 0 = 关掉本层）。")
             elif _is_jump and _both_tight:
                 # 贴身且最近的是跳跃 → 用跳跃。
                 #
@@ -3899,6 +4014,10 @@ class MapleStoryAutoBot:
         # （路线颜色编码里仍可能有 teleport 动作，所以这个降级判断保留）
         if self.cfg["key"]["teleport"] == "" and self.cmd_action == "teleport":
             self.cmd_action = "jump"
+
+        # 本帧真的发出了跳跃 ⇒ 清掉"跳跃被挡"的累计（见 _jump_align_suppress）
+        if self.cmd_action == "jump":
+            self._jump_align_suppress = 0
 
         # ── 回正：起跳前先**停稳**，让跳跃真的变垂直（见 _apply_jump_brake）────
         self._apply_jump_brake()
