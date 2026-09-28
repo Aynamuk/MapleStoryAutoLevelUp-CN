@@ -135,10 +135,45 @@ def _report_key_failure(api, key, err):
         f"          ③ 游戏窗口不在前台（按键只会送到最前面的窗口）。")
 
 
+#: ── 键名归一化（2026-09-28 加，issue #6 的真凶）─────────────────────────
+#: 驱动只认它自己那套键名（见 interception._keycodes）。而**界面上的按键捕获**
+#: 走的是 Qt 的 `QKeySequence.toString(NativeText)`，两者叫法不总是一致：
+#:     界面（Qt）      驱动
+#:     control    ->   ctrl      ← **issue #6 就是踩在这个上**
+#:     pgdown     ->   pgdn
+#:     ins        ->   insert
+#: 后果极隐蔽：引擎照常算出 attack 指令、日志里也能看到 `指令(none none attack)`，
+#: 但键**一次都没送进游戏** —— 用户看到的是「走位正常，完全不攻击」。
+#: （实测：用户把基础攻击设成 Ctrl 键，界面上他看到的确实是 "Control"。）
+#:
+#: ⚠️ 表要**小而准**：这里只放"用户真会按、界面真会产出、而驱动不认"的键。
+#:    实测（枚举 Qt.Key_* 全量 × 驱动键表）：常规键里只有下面这几种对不上，
+#:    其余全是多媒体键/特殊符号（放大缩小、音量、货币符号…），不必管。
+_KEY_ALIAS = {
+    "control": "ctrl",
+    "pgdown": "pgdn",
+    "ins": "insert",
+}
+
+
+def normalize_key(key):
+    """把界面上的键名转成驱动认识的名字（纯函数，可离线单测）。
+
+    ⚠️ 为什么必须有这一层：界面的按键捕获产出 Qt 的叫法，驱动的键表是另一套。
+       不转换的话，`control` 这种键会在**每一帧**都抛 UnknownKeyError，
+       而失败上报是"每类只报一次"的 warning —— 用户基本看不到，
+       症状就变成「角色走得好好的，但一次都不打怪」。
+    """
+    if not key:
+        return key
+    k = str(key).strip().lower()
+    return _KEY_ALIAS.get(k, k)
+
+
 def key_down(key):
     """按下按键不释放"""
     try:
-        interception.key_down(key.lower())
+        interception.key_down(normalize_key(key))
     except Exception as e:
         _report_key_failure("key_down", key, e)
 
@@ -146,7 +181,7 @@ def key_down(key):
 def key_up(key):
     """释放按键"""
     try:
-        interception.key_up(key.lower())
+        interception.key_up(normalize_key(key))
     except Exception as e:
         _report_key_failure("key_up", key, e)
 
@@ -163,9 +198,10 @@ def press_key(key, duration=None):
         duration = random.randint(KEY_HOLD_MIN, KEY_HOLD_MAX) / 1000.0
 
     try:
-        interception.key_down(key.lower())
+        _k = normalize_key(key)
+        interception.key_down(_k)
         time.sleep(duration)
-        interception.key_up(key.lower())
+        interception.key_up(_k)
     except Exception as e:
         _report_key_failure("press_key", key, e)
 

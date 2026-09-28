@@ -299,6 +299,84 @@ class MapleStoryAutoBot:
                 f"        不修的话引擎会在运行中因缺键崩溃，症状是「角色不动 + 日志突然静默」。")
         return missing
 
+    def _check_key_names(self, cfg):
+        '''校验配置里的按键名，驱动认不认（2026-09-28 加，issue #6 的真凶）。
+
+        为什么必须有这一层（真机现场）：
+            界面上的按键是**捕获式**的（你按哪个键就填哪个），产出的是 Qt 的叫法。
+            而 Interception 驱动有**自己的键名表**。两者不总是一致 ——
+            最典型的就是 **Ctrl 键：界面写 "Control"，驱动只认 "ctrl"**。
+
+            后果极其隐蔽（issue #6 那位用户）：
+              · 引擎照常算出 attack 指令，日志里能看到 `指令(none none attack)`
+              · 但 `key_down("control")` 每一帧都抛 UnknownKeyError
+              · 而失败上报是"每类只报一次"的 warning，很容易淹没
+              ⇒ 用户看到的是「**走位完全正常，但一次都不打怪**」
+                —— 因为方向键名（left/right/up/down）驱动都认，只有技能键死了。
+
+        `InterceptionController.normalize_key` 已经能自动纠正已知的同义词
+        （control→ctrl 等）。这里做的是**兜底**：万一还有没覆盖到的键名，
+        在启动时就**明确报出来**，而不是让它静默失效一整天。
+
+        ⚠️ 只报不拦：这是"可能不影响"的问题（比如用户填的键恰好是驱动认的别名），
+           而且按键链路本身有 normalize_key 兜着。宁可多一句提示，也别把挂机堵死。
+        '''
+        try:
+            from interception._keycodes import get_key_information, UnknownKeyError
+        except Exception:                                            # noqa: BLE001
+            return                    # 驱动没装/导入失败 → 别的检查会报，这里不添乱
+
+        from src.input.InterceptionController import normalize_key
+
+        # 收集配置里所有"会真的发给驱动"的键
+        key_cfg = cfg.get("key", {}) or {}
+        items = []
+        for name in ("directional_attack", "aoe_skill", "jump", "teleport",
+                     "return_home"):
+            k = key_cfg.get(name)
+            if k:
+                items.append((f"按键绑定里的「{name}」", k))
+        for i, k in enumerate(((cfg.get("buff_skill", {}) or {}).get("keys")) or []):
+            if k:
+                items.append((f"buff 技能第 {i + 1} 个", k))
+
+        # 药水键（hp/mp 各档位的 key）
+        pot = cfg.get("potion", {}) or {}
+        for kind in ("hp", "mp"):
+            for entry in (pot.get(kind) or []):
+                if isinstance(entry, dict) and entry.get("key"):
+                    items.append((f"喝药（{kind}/{entry.get('name', '?')}）",
+                                  entry["key"]))
+
+        bad = []
+        for where, raw in items:
+            k = normalize_key(raw)
+            try:
+                get_key_information(k)
+            except UnknownKeyError:
+                bad.append((where, raw, k))
+            except Exception:                                        # noqa: BLE001
+                pass
+
+        if bad:
+            lines = [
+                f"[按键校验] 有 {len(bad)} 个按键，驱动不认识 —— "
+                f"**这几个键按下去游戏不会有任何反应**："]
+            for where, raw, k in bad:
+                lines.append(f"        · {where}：填的是 {raw!r}"
+                             f"（转换后 {k!r} 仍不被驱动接受）")
+            lines += [
+                "        影响：对应的功能会**静默失效** ——",
+                "          技能键不认识 → 角色走位正常但一次都不出招；",
+                "          药水键不认识 → 血蓝低了不会自动喝。",
+                "        怎么改：在界面上把这个键**重新按一次**（换一个更常见的键，",
+                "          比如字母键或数字键），或者直接编辑 config 里的键名。",
+                "        常见对照：Ctrl 要写成 ctrl、PageDown 要写成 pgdn、",
+                "          Insert 要写成 insert。"]
+            logger.error("\n".join(lines))
+        else:
+            logger.info(f"[按键校验] {len(items)} 个按键都正常（驱动认识）。")
+
     def _setup_bars_and_potions(self, cfg):
         '''装配血蓝识别 + 喝药决策（2026-09-27 加）。
 
@@ -941,6 +1019,14 @@ class MapleStoryAutoBot:
 
         # Print mode on log
         logger.info(f"[load_config] Config AutoBot as {cfg['bot']['mode']} mode")
+
+        # ── 按键校验：驱动认不认这些键名（2026-09-28 加，issue #6）────────
+        # ⚠️ 放在血蓝装配**之前**：它只打日志、不改任何配置，越早报越好。
+        #    必须 try 包住 —— 这是"提示性"检查，绝不能因为它出错而堵住挂机。
+        try:
+            self._check_key_names(cfg)
+        except Exception as e:                                       # noqa: BLE001
+            logger.warning(f"[按键校验] 校验本身出错（不影响挂机）：{e}")
 
         # ── 血蓝监控 + 自动喝药：装配（2026-09-27 加）─────────────────────
         self._setup_bars_and_potions(cfg)
