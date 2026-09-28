@@ -4087,62 +4087,7 @@ class MapleStoryAutoBot:
             f"指令({self.cmd_move_x} {self.cmd_move_y} {self.cmd_action})"
             + (f"，距上次 {gap:.2f}s" if gap is not None else ""))
 
-    def _attack_pos_is_fresh(self):
-        '''角色屏幕坐标是否**可信**（名字定位最近命中过）。
-
-        为什么要单独抽一条判据（issue #6，2026-09-28）：
-            名字定位失败时 `get_player_location_by_nametag` **不更新** `self.loc_nametag`
-            （见那里的 else 分支），`loc_player` 于是**冻在最后一次命中的位置**。
-            而整条攻击链都以 `loc_player` 为锚：
-                搜索框 : py ± (range_y + margin) = py ± 120
-                攻击框 : py ± range_y/2          = py ± 35   ← 纵向只有 70px
-            角色每帧都在动（实测约 0.3px/帧、20fps ⇒ 约 6px/秒），
-            偏差一旦超过 35px，**怪就完全落出攻击框** ⇒ 永远不出招。
-            用户实测（issue #6）：名字 miss 最长 **650 帧 ≈ 32 秒**，
-            这期间全程「不打怪」，而日志只说一句"影响有限" —— 误导性极强。
-
-        判据：连续 miss 帧数超过 `nametag.stale_after_frames`（默认 30 帧 ≈ 1.5 秒）。
-            ⚠️ 为什么是 30 而不是 1：名字偶尔被别的玩家名牌盖住一两帧是**常态**
-               （实测人堆里 20 帧有 7~13 帧认不出），那种情况位置**仍然够准**
-               （同一张图里角色屏幕位置几乎不动），不该因此停止打怪。
-               30 帧 ≈ 1.5 秒才开始怀疑，既不误伤抖动、又能挡住真失效。
-
-        Returns:
-            bool: True = 位置可信，可以正常打怪；False = 位置已过期，**不该出招**。
-        '''
-        try:
-            limit = int((self.cfg.get("nametag", {}) or {}).get("stale_after_frames", 30))
-        except (TypeError, ValueError, AttributeError):
-            limit = 30
-        if limit <= 0:
-            return True                  # 填 0 = 关掉本层（退回老行为）
-        return int(getattr(self, "nametag_miss_streak", 0) or 0) < limit
-
     def update_cmd_by_mob_detection(self):
-        # ── 前置闸：位置过期就不出招（issue #6，2026-09-28）────────────────────
-        # ⚠️ 放在**最前面**、且在算搜索框之前：`self.loc_player` 一旦过期，
-        #    后面的 x0/y0/x1/y1 全是错的基准，连"搜哪里"都不可信。
-        # 为什么是"不出招"而不是"照常出招"：
-        #    过期坐标下出的招**方向也是错的**（转身用 loc_player 判左右），
-        #    会朝空气甩技能、还可能把朝向带偏；不如停手，等名字恢复。
-        #    移动指令**不动** —— 巡逻靠的是小地图全局坐标，与名字定位无关，
-        #    停手期间角色照常走路、照常打怪一恢复就能接着打。
-        if not self._attack_pos_is_fresh():
-            n = int(getattr(self, "nametag_miss_streak", 0) or 0)
-            if time.time() - getattr(self, "t_stale_attack_log", 0) > 10:
-                self.t_stale_attack_log = time.time()
-                logger.warning(
-                    f"[打怪暂停] 角色位置已经连续 {n} 帧没识别到"
-                    f"（名牌被挡住 / 地图太挤 / 名字或称号改过）——\n"
-                    f"        位置停在上次命中的地方，**这一段时间不会出招**"
-                    f"（因为攻击判定用的就是角色在哪，位置过期会打空、还会打错方向）。\n"
-                    f"        巡逻不受影响，位置一恢复就继续打怪。\n"
-                    f"        若长时间不恢复：① 走到人少处 ② 重新标定名字模板")
-            # 清掉残留的 attack（否则键盘层会一直按技能键打空气）
-            if self.cmd_action == "attack":
-                self.cmd_action = "none"
-            return
-
         # Get monster search box
         margin = self.cfg["monster_detect"]["search_box_margin"]
         if self.cfg["bot"]["attack"] == "aoe_skill":
@@ -4478,35 +4423,27 @@ class MapleStoryAutoBot:
                     f"              ② 角色名/称号改过了吗？改过要重新标定模板\n"
                     f"              ③ 点工具箱「保存诊断包」发给 AI，让他看模板本身还认不认得")
             else:
-                # ⚠️★ 2026-09-28 改文案（issue #6）：原来这里写的是
-                #    「位置沿用上次命中的结果 —— 同图内角色屏幕位置基本不动，影响有限」，
-                #    这个判断**在攻击判定上是错的**：
-                #      角色屏幕位置确实变化不大，但**卡住不动的是"引擎以为角色在哪"**，
-                #      角色本身还在走。偏差累积超过攻击框的半高（range_y/2 = 35px）
-                #      之后，怪就完全落出攻击框 ⇒ **彻底不打怪**。
-                #    用户实测（issue #6）：miss 连续 650 帧（≈32 秒）全程不出招。
-                #    ⇒ 文案改为按"是否已超过 stale_after_frames"分级说清后果。
-                _stale = int(getattr(self, "nametag_miss_streak", 0) or 0)
-                try:
-                    _stale_lim = int((self.cfg.get("nametag", {}) or {})
-                                     .get("stale_after_frames", 30))
-                except (TypeError, ValueError, AttributeError):
-                    _stale_lim = 30
-                if _stale_lim > 0 and _stale >= _stale_lim:
-                    logger.warning(
-                        f"[名字定位] 已连续 {_stale} 帧没匹配到角色名名牌"
-                        f"（阈值 {self.cfg['nametag']['diff_thres']}），"
-                        f"**已超过 {_stale_lim} 帧 → 打怪判定暂停**"
-                        f"（位置过期会让技能打空、方向也可能反）。\n"
-                        f"        巡逻不受影响，位置一恢复就继续打怪。\n"
-                        f"        常见原因：名牌被别的玩家盖住 / 地图太挤 / 名字或称号改过。")
-                else:
-                    logger.warning(
-                        f"[名字定位] 已连续 {_stale} 帧没匹配到角色名名牌"
-                        f"（阈值 {self.cfg['nametag']['diff_thres']}），"
-                        f"位置沿用上次命中的结果 —— 暂未影响打怪"
-                        f"（超过 {_stale_lim if _stale_lim > 0 else 'N'} 帧才会暂停打怪）。"
-                        f"最常见原因：地图拥挤、自己的名牌被别的玩家盖住。")
+                # ⚠️★ 2026-09-28 改文案（issue #6 排查）：
+                #    原来写的是「位置沿用上次命中的结果 —— 同图内角色屏幕位置基本不动，
+                #    影响有限」。这句**在攻击判定上是错的**：
+                #      角色屏幕位置变化确实不大，但卡住不动的是"引擎以为角色在哪"，
+                #      角色本身还在走 —— 偏差累积超过攻击框半高（range_y/2 = 35px）后，
+                #      怪就完全落出攻击框 ⇒ **打不到怪**。
+                #    用户实测（issue #6）：miss 连续 650 帧（≈32 秒），期间基本不出招。
+                #    ⇒ 文案改为**说清这个后果**，并给出可操作的处理办法。
+                #    ⚠️ 这里**只改文案、不改行为**：位置过期时是否该停手，
+                #      要先用真机实测标定"偏差多大才开始打空"，不能拍脑袋定阈值。
+                logger.warning(
+                    f"[名字定位] 已连续 {_streak} 帧没匹配到角色名名牌"
+                    f"（阈值 {self.cfg['nametag']['diff_thres']}），"
+                    f"位置沿用上次命中的结果。\n"
+                    f"        注意：**打怪判定用的就是这个位置**，角色却在继续走 ——"
+                    f"偏得多时会打空、甚至朝错方向出招（攻击框上下只有 "
+                    f"{self.cfg['directional_attack']['range_y']}px）。\n"
+                    f"        常见原因：地图拥挤（名牌被别的玩家盖住）/ 名字或称号改过 / "
+                    f"模板没标定好。\n"
+                    f"        若长时间不恢复：① 先走到人少处 ② 重新标定名字模板"
+                    f"（双击项目根的「标定名字标签.bat」）")
 
         # Update player location
         if loc_player is not None:

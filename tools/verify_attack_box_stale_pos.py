@@ -56,9 +56,6 @@ def make_stub(cfg, loc_player):
     s = S()
     s.get_attack_range = lambda is_left=True: MapleStoryAutoBot.get_attack_range(
         s, is_left=is_left)
-    # 同理：`update_cmd_by_mob_detection` 开头会调 `self._attack_pos_is_fresh()`，
-    # 也必须把真实方法绑上（绑的是引擎原方法，保证"测的就是跑的那份"）。
-    s._attack_pos_is_fresh = lambda: MapleStoryAutoBot._attack_pos_is_fresh(s)
     s.cfg = cfg
     s.loc_player = loc_player
     s.monsters = []
@@ -147,106 +144,54 @@ def main():
     print(f"       （实际最先失效的纵向偏差 = {min(losses) if losses else '未失效'}px）")
 
     print()
-    print("===== 5. 位置过期时的**行为**：暂停出招 + 分级告警 =====")
+    print("===== 4. 名字定位失效时**没有任何**降级/拒止（这就是缺陷本身） =====")
     import inspect
-    from src.engine.MapleStoryAutoLevelUp import MapleStoryAutoBot as B
-    src_gate = inspect.getsource(B._attack_pos_is_fresh)
+    src = inspect.getsource(MapleStoryAutoBot.get_player_location_by_nametag)
+    check("匹配失败时不更新 loc_nametag（位置被冻住）",
+          "self.nametag_miss_streak += 1" in src, True)
+    check("  ⤷ 且不删除/复位 loc_nametag", "self.loc_nametag = None" not in src, True)
 
-    st = make_stub(base_cfg(), (700, 400))
-    st.nametag_miss_streak = 0
-    check("刚命中（miss=0）→ 位置可信", B._attack_pos_is_fresh(st), True)
-
-    st.nametag_miss_streak = 29
-    check("miss=29（<30）→ 仍可信（不误伤短暂遮挡）", B._attack_pos_is_fresh(st), True)
-
-    st.nametag_miss_streak = 30
-    check("miss=30（=阈值）→ 判为过期", B._attack_pos_is_fresh(st), False)
-
-    st.nametag_miss_streak = 650
-    check("miss=650（issue #6 实测最长）→ 判为过期", B._attack_pos_is_fresh(st), False)
-
-    st.nametag_miss_streak = 5
-    st.cfg = dict(base_cfg())
-    st.cfg["nametag"] = {"stale_after_frames": 0}
-    check("configured 0 → 关掉本层（退回老行为）", B._attack_pos_is_fresh(st), True)
-
-    st.cfg = {"nametag": {"stale_after_frames": "abc"}}
-    check("填非法值 → 回落默认 30（不抛异常）", B._attack_pos_is_fresh(st), True)
-
-    class Bare:
-        pass
-    try:
-        r = B._attack_pos_is_fresh(Bare())
-        check("裸对象不抛异常（Stub 不走 __init__）", r, True)
-    except Exception as e:                       # noqa: BLE001
-        check(f"裸对象不抛异常（实际抛了 {type(e).__name__}）", False, True)
-
-    check("闸门在 update_cmd_by_mob_detection 最前面（算搜索框之前）",
-          "if not self._attack_pos_is_fresh():" in
-          inspect.getsource(B.update_cmd_by_mob_detection), True)
-    check("   ⤷ 暂停时会清掉残留 attack（不打空气）",
-          'if self.cmd_action == "attack":\n                self.cmd_action = "none"' in
-          inspect.getsource(B.update_cmd_by_mob_detection), True)
-    check("   ⤷ **不碰移动指令**（巡逻靠小地图全局坐标，与名字定位无关）",
-          "cmd_move_x = " not in
-          inspect.getsource(B.update_cmd_by_mob_detection).split("_attack_pos_is_fresh()")[1]
-          .split("Get monster search box")[0], True)
+    src2 = inspect.getsource(MapleStoryAutoBot.update_cmd_by_mob_detection)
+    check("攻击判定**没有**检查 nametag 是否命中",
+          "nametag_hit" not in src2 and "nametag_miss_streak" not in src2, True)
+    src3 = inspect.getsource(MapleStoryAutoBot.get_nearest_monster)
+    check("攻击框计算**没有**检查 nametag 是否命中",
+          "nametag" not in src3, True)
 
     print()
-    print("===== 5b. 位置过期对「选方向」的影响（issue #6 第 3 位用户） =====")
-    # `get_attack_direction` 用 self.loc_player[0] 判断"怪在角色左边还是右边"
-    # （见引擎 is_monster_on_correct_side）。位置一过期，这个左右判断的**基准**就错了。
-    #
-    # ⚠️ 实测结论（本用例两次实证，纠正一个想当然的判断）：
-    #    位置过期**不会**让引擎"朝反方向出招" —— 因为 is_monster_on_correct_side
-    #    会发现"怪不在我这一侧"从而返回 None，只是**不出招**。
-    #    所以「左右不分」不是这条路径直接造成的；这条只解释「不打怪」。
-    mon_left = {"name": "m", "position": (500, 380), "size": (40, 40), "score": 0.1}
-    st = make_stub(base_cfg(), (700, 400))
-    st.monsters = [mon_left]
-    st.monsters_info = {"m": [(np.zeros((40, 40, 3), np.uint8), None)]}
-    d = B.get_attack_direction(st, mon_left, None)
-    check("位置新鲜：怪在左边 → 判 left（正确）", d, "left")
+    print("===== 5. 告警文案已说清后果（**只改文案，不改行为**） =====")
+    # ⚠️★ 本用例**刻意不断言任何"位置过期就停手"的行为** ——
+    #    2026-09-28 曾加过一个 stale_after_frames=30 的闸门，随后**回滚**了：
+    #    按实测速度（约 6px/秒）算，30 帧（1.5 秒）时偏差才 9px，
+    #    而攻击框能容忍 ±35px ⇒ 那一版会**把本来还能打到的也停掉**，
+    #    对命中率本就极低的用户是恶化。停手阈值必须先用真机实测标定，不能拍脑袋。
+    import inspect
+    src4 = inspect.getsource(MapleStoryAutoBot)
+    _lines = [ln for ln in src4.splitlines() if not ln.lstrip().startswith("#")]
+    _code = "\n".join(_lines)
+    check("存在 nametag_ever_hit 分支（区分两种严重程度）",
+          "if not self.nametag_ever_hit:" in _code, True)
+    check("活代码里已去掉误导性的「影响有限」", "影响有限" not in _code, True)
+    check("文案点明「打怪判定用的就是这个位置」",
+          "打怪判定用的就是这个位置" in _code, True)
+    check("文案给出攻击框高度（让人看懂为什么偏一点就打空）",
+          "range_y" in _code.split("名字定位]")[-1][:600], True)
+    check("文案给出可操作的处理办法（重新标定模板）",
+          "重新标定名字模板" in _code, True)
 
-    st.loc_player = (100, 400)          # 位置过期到怪的右边
-    d = B.get_attack_direction(st, mon_left, None)
-    check("位置过期：同一只怪 → 返回 None（**不是**反向出招）", d, None)
-
-    # 真正会发生的是：闸门让引擎**在选方向之前就 return** ⇒ 下面这条路径走不到。
-    st = make_stub(base_cfg(), (100, 400))
-    st.monsters = [mon_left]
-    st.monsters_info = {"m": [(np.zeros((40, 40, 3), np.uint8), None)]}
-    st.cmd_action = "attack"          # 预置残留，验证被清掉
-    st.nametag_miss_streak = 650
-    st.t_last_attack = 0.0
-    st.cfg = dict(base_cfg())
-    st.cfg["nametag"] = {"stale_after_frames": 30}
-    st.img_frame = np.zeros((680, 768, 3), np.uint8)
-    B.update_cmd_by_mob_detection(st)
-    check("位置过期 → 不出招（残留 attack 被清）", st.cmd_action, "none")
-    check("   ⤷ 也没给任何方向指令（不会左右乱窜）", st.cmd_move_x, "none")
-
-    src_all = inspect.getsource(B)
-    # ⚠️ 断言只能查**真的会打出去的日志串**，不能扫全文 ——
-    #    源码里为说明"改了什么、为什么改"，在注释和 docstring 里**引用**了旧文案，
-    #    按整篇匹配会把它们也算进去、造成假失败（本用例前两版都这么挂的：
-    #    第一版漏了注释、第二版只过滤 `#` 行，漏了跨行 docstring —— 见 :4038）。
-    #    做法：只看**日志调用真正传进去的 f-string 字面量**。
-    import re as _re
-    _logged = " ".join(_re.findall(r'logger\.\w+\(\s*((?:f?)"[^"]*"(?:\s*(?:f?)"[^"]*")*)',
-                                   src_all, _re.S))
-    check("打出去的日志里不再有「屏幕位置基本不动，影响有限」",
-          "影响有限" not in _logged, True)
-    check("打出去的日志里有分级后的「打怪判定暂停」",
-          "打怪判定暂停" in _logged, True)
-    check("   ⤷ 且保留未超阈值时的「暂未影响打怪」分支",
-          "暂未影响打怪" in _logged, True)
+    print()
+    print("===== 6. 没有引入「位置过期就停手」的闸门（已回滚，防复发） =====")
+    check("引擎里不存在 _attack_pos_is_fresh 闸门",
+          "_attack_pos_is_fresh" not in _code, True)
+    check("update_cmd_by_mob_detection 开头没有 stale 短路",
+          "stale_after_frames" not in _code, True)
 
     print()
     if FAIL:
         print(f"失败的用例（{len(FAIL)}）：{', '.join(FAIL)}")
         return 1
-    print("全部通过：已钉死「位置过期 → 攻击框偏移 → 静默不打怪」的事实链")
+    print("全部通过：已钉死「位置过期 → 攻击框偏移」的事实链；"
+          "行为**未被改动**（停手闸门已回滚，阈值待真机标定）")
     return 0
 
 
