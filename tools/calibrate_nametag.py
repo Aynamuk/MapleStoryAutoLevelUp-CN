@@ -176,22 +176,17 @@ def write_config(name, offset, path=None):
         data["nametag"] = nt
     nt["name"] = name
     nt["offset"] = [int(offset[0]), int(offset[1])]
-    # ⚠️★ 2026-09-27 必须**一并写 mode**：
-    #   本工具生成的模板是「**白字掩码**」形态 —— 非文字像素被涂成纯绿 (0,255,0)
-    #   当掩码（见 extract_template 的 `tpl[fg == 0] = GREEN`）。
-    #   这种模板**只能**配 `white_mask` 模式（引擎里会 inRange 只留白字，
-    #   绿底自动忽略）；配 `grayscale` 会把 78% 的绿底也拿去比对 ——
-    #   而游戏画面里根本没有这块绿 → **每次匹配都失败**。
-    #
-    #   原来这里只写 name / offset，于是 mode 永远继承 config_default 的
-    #   `grayscale` ⇒ **工具和默认配置天生不配，每个用户都会踩**。
-    #   症状：日志刷 `名字命中False(missN)` → 角色定位退化到小地图
-    #   （精度仅 ±10~13 游戏像素）→ 跳跃判定不准（"跳太早摸不到梯子"）、
-    #   攻击框落偏（打不到怪）。实测复现于 2026-09-27 用户现场。
-    #
-    #   为什么不让用户自己填：**工具知道它生成的是哪种模板**，就该自己把
-    #   配套模式写对 —— 让用户去猜 white_mask/grayscale 是不合理的。
-    nt["mode"] = "white_mask"
+    # ⚠️★ 2026-09-28 撤回 v1.0.11 写入的 mode=white_mask（回归修复）：
+    #   实测（真机帧 14/14，tools/verify_nametag）：
+    #     white_mask 模式下绿底 (0,255,0) 灰度≈150 恰好过 inRange(150,255)
+    #     下限 → 模板二值化后**全部像素都是 255**，再被 get_mask 排除绿底
+    #     ⇒ 参与比对的只剩"常数 255"文字像素 → 画面里任何纯白区域都能拿
+    #     0 分 ⇒ 匹配锁死在填充边，位置全错且无告警（用户报"漂移"）。
+    #     grayscale 模式 14/14 全对（文字灰度 219/245/227 有判别力）。
+    #   v1.0.11 那条"grayscale 会把绿底拿去比对"的理由是**错的**——
+    #   get_mask 的绿底排除在所有模式下都生效，与 mode 无关。
+    #   本工具的模板（绿底+真白字）配 grayscale 才是正确组合。
+    nt["mode"] = "grayscale"
 
     try:
         with open(path, "w", encoding="utf-8") as f:

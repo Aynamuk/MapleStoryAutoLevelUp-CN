@@ -184,16 +184,21 @@ nametag:
   # 国服怀旧服无法通过组队血条识别角色位置，因此本项为必需功能，没有开关。
   # 使用前必须先把 <name>.png 放到 nametag/ 目录下（截取自己角色头顶的名字标签）。
   name: "example" # 加载 nametag/<name>.png 作为模板（填文件名，不含 .png）
-  mode: "white_mask"  # 🧪 匹配模式，可选："white_mask" "grayscale" "histogram_eq"
-  # ⚠️★ 2026-09-27 默认值由 "grayscale" 改为 "white_mask" —— 原来那个默认是**错的**。
-  #   原因：本项目标定工具（tools/calibrate_nametag.py）生成的模板是
-  #   **白字掩码**形态 —— 非文字像素被涂成纯绿 (0,255,0) 当掩码。
-  #   这种模板配 grayscale 会把 78% 的绿底也拿去比对，而游戏画面里没有那块绿
-  #   ⇒ **每次匹配都失败**（日志刷 `名字命中False`）。
-  #   配 white_mask 才会 inRange 只留白字、忽略绿底 —— 这才是设计意图。
-  #   实测（2026-09-27 用户现场）：模板 59x21 中绿底 961 px（78%），
-  #   grayscale 下必然失配；white_mask 下只保留 108 px 白字，正常定位。
-  #   配套改动：标定工具保存时也会一并写 mode=white_mask（见其 write_config）。
+  mode: "grayscale"  # 🧪 匹配模式，可选："white_mask" "grayscale" "histogram_eq"
+  # ⚠️★ 2026-09-28 撤回 v1.0.11 的默认值改动（white_mask → grayscale）。
+  #   v1.0.11 把默认改成 white_mask 是**一次回归**，真机帧实测（14/14）：
+  #     white_mask：模板退化为"全 255 常数"——绿底 (0,255,0) 灰度≈150，
+  #       恰好过 inRange(150,255) 下限 → 绿底全被判成白字，而 get_mask
+  #       掩码又把绿底排除 ⇒ 参与比对的像素**全是同一个值 255**（常数模板）
+  #       ⇒ 画面里任何纯白区域（天空/UI/填充边）都能拿 SQDIFF 0 分
+  #       ⇒ 匹配锁死在填充边 (-58,-14)，分数完美、不触发任何告警
+  #       —— 用户看到的就是"定位漂移得非常厉害"（issue #4，2026-09-28）。
+  #     grayscale：14/14 全对，分数最高 0.0035（阈值 0.01）。
+  #   v1.0.11 注释里"grayscale 会把 78% 绿底拿去比对"的判断是**错的**：
+  #   引擎的 get_mask 绿底排除层（精确颜色匹配）在**所有模式**下都生效，
+  #   grayscale 一直是对的。
+  #   引擎 load_config 会自动把存量配置里的 white_mask 纠正为 grayscale
+  #   （见 MapleStoryAutoLevelUp.py 名字模板加载段），老用户无需手改。
   # 🎯 标定值：由「名字模板左上角」反推「角色中心」的偏移。**不是调参项，是量出来的数。**
   #
   # ⚠️ 代码真实语义（2026-09-10 核过 engine 第 433-435 行，与上游原版逐字一致）：

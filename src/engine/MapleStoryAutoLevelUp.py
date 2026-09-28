@@ -605,6 +605,21 @@ class MapleStoryAutoBot:
         # 先校验配置完整性（缺键会让主循环在运行中静默崩溃，见 _check_cfg_completeness）
         self._check_cfg_completeness(cfg)
 
+        # ── ⚠️★ 2026-09-28 存量配置自动纠正：white_mask → grayscale ──────────
+        #   v1.0.11 曾把默认（及标定工具写入的）mode 改成 white_mask，那是一次
+        #   回归：绿底 (0,255,0) 灰度≈150 恰好过 inRange(150,255) 下限 ⇒ 模板
+        #   二值化后全 255 常数 ⇒ 任何纯白区域都能拿 0 分 ⇒ 匹配锁死填充边、
+        #   分数完美无告警（用户报"定位漂移"，issue #4）。grayscale 14/14 全对。
+        #   存量配置里写着 white_mask —— 这里在加载时自动纠正，用户不用手改。
+        #   ⚠️ 位置有意放在 _check_cfg_completeness 之后、地图分支之前：
+        #      下面 `if mode == "normal"` 里有「地图未选择就提前 return」，
+        #      放它后面会导致没选图时纠正块根本执行不到（verify_nametag_mode_fix 用例1 踩坑）。
+        if str(cfg["nametag"].get("mode", "")).strip().lower() == "white_mask":
+            cfg["nametag"]["mode"] = "grayscale"
+            logger.warning(
+                "[名字定位] 检测到 nametag.mode = white_mask（v1.0.11 期间的错误默认值，"
+                "会导致定位锁死在画面边缘）—— 已自动改回 grayscale，无需手动处理。")
+
         # Parse color code in config
         self.color_code = {
             tuple(map(int, k.split(','))): v
