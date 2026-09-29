@@ -77,6 +77,7 @@ jobs:
             'verify_goal_unreachable_warn',
             'verify_attack_box_stale_pos',
             'verify_two_side_mob_attack',
+            'verify_jump_align_giveup',
             'verify_key_name_alias',
             'verify_mob_boxes',
             'verify_mob_library',
