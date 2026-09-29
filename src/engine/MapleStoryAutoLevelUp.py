@@ -4172,48 +4172,9 @@ class MapleStoryAutoBot:
             #     日志现场：`帧306 全局(182,116) 指令(none up none)`（在起跳点却不跳）。
             #   ⇒ 教训：`is_on_ladder` **不能**用来判断"真的在爬梯"，
             #     它在跳跃过程中同样为真。想区分"爬梯 vs 跳跃"必须另找依据。
-            # ── ★★ 2026-09-29 加：本层必须有**兜底出口**，否则就是死路 ─────────
-            #
-            #   现场（issue #12 评论，用户 chenzhi822 真机日志 11:52）：
-            #     角色全局 x 在 82~96 之间反复（每采样差 2px），日志一路
-            #     `[梯子] 全局 x 变化 2px（82 → 80）⇒ 判定已离开梯子` 与
-            #     `[路线失联] ... 重新接引`，跳跃被本层**连续吞掉**，
-            #     用户原话：「死活对不准绳子跳」「第二次尝试能跳对一次，之后又乱走了」。
-            #
-            #   为什么会永远对不准：本层的放行条件是"横向对齐到 |dx| ≤ _jtol"，
-            #   而角色是**被路线指令带着走**的 —— 路线接引与实际落点每次差
-            #   2px 以上时，对齐窗口**永远闪不过去**，于是：
-            #     跳跃 → 被吞（只走不跳）→ 角色继续被接引指令拉走 → 更对不准 → …
-            #   这是一个**没有出口的抑制**。上游那层 `_jtol` 的注释假设
-            #   "角色会自己走到梯子正下方"，但真机上"走到"本身由路线控制，
-            #   路线偏一点这个假设就不成立。
-            #
-            #   ⇒ 补一条兜底：连续被吞满 `jump_align_giveup` 帧（默认 60 ≈ 3 秒，
-            #     按 20fps 折算）就**放弃对齐、照跳**。宁可跳偏一次让角色自己
-            #     重新接引（它本来就有 [路线失联] 接引机制），也不要**永远不跳**。
-            #
-            #   ⚠️ 为什么阈值取"帧"而不是"秒"：本层的调用点是每帧一次，
-            #      而 fps 实测在 6~20 之间浮动（用户日志里 6.4 / 19.3 都有）。
-            #      用帧数在低帧率下等价于"更早放弃"，方向是对的（越卡越该跳），
-            #      且不需要引时间源，离线自检可直接按帧喂。
-            #   ⚠️ 填 0 = 关掉兜底（退回旧行为：可以无限期只走不跳）。
-            try:
-                _jgiveup = int(self.cfg.get("route", {}).get("jump_align_giveup", 60) or 0)
-            except (TypeError, ValueError):
-                _jgiveup = 60
-            # ⚠️ `getattr` 兜底必须挡住**非数字**的返回值：离线用例的 Stub
-            #    不走 __init__，`__getattr__` 兜底会返回一个 lambda，
-            #    直接 int() 会抛 TypeError（verify_home_none_no_crash 实测踩到）。
-            #    与本文件其它埋点的写法保持一致：拿到手先确认能用。
-            try:
-                _n_before = int(getattr(self, "_jump_align_suppress", 0) or 0)
-            except (TypeError, ValueError):
-                _n_before = 0
-            _give_up = _jgiveup > 0 and _n_before >= _jgiveup
             if _is_jump and _jtol > 0 and _jmx in ("left", "right") \
                     and _lad_px is not None \
-                    and abs(int(_lad_px[0]) - int(self.loc_player_global[0])) > _jtol \
-                    and not _give_up:
+                    and abs(int(_lad_px[0]) - int(self.loc_player_global[0])) > _jtol:
                 # 还没和梯子对齐 → 先走过去（保留方向，去掉跳跃）
                 self.cmd_move_x, self.cmd_move_y, self.cmd_action = _cc_cmd.split()
                 self.cmd_action = "none"
@@ -4224,17 +4185,8 @@ class MapleStoryAutoBot:
                 # issue #6 用户报的「不跳」就卡在这个盲区上。
                 # 这里只累计 + 节流告警；累计到阈值说明"一直没对齐"，
                 # 多半是跳跃点离梯子太远（录制问题），给出可操作提示。
-                _n = _n_before + 1
+                _n = int(getattr(self, "_jump_align_suppress", 0) or 0) + 1
                 self._jump_align_suppress = _n
-                if _jgiveup > 0 and _n == _jgiveup + 1 and jump_trace_on(self.cfg):
-                    _dxg = abs(int(_lad_px[0]) - int(self.loc_player_global[0]))
-                    logger.warning(
-                        f"[跳跃被挡] 角色一直走不到梯子正下方（还差 {_dxg}px，"
-                        f"容差 {_jtol}px），已连续 {_jgiveup} 帧「只走不跳」。\n"
-                        f"        ⇒ 放弃对齐、**照跳**（跳偏了角色会自己重新接引，"
-                        f"总比永远不跳强）。\n"
-                        f"        若仍反复跳不准：把跳跃点录得离梯子更近一点，"
-                        f"或放宽 route.jump_align_tol（当前 {_jtol}，填 0 = 关掉本层）。")
                 if _n == 90 and jump_trace_on(self.cfg):
                     _dxg = abs(int(_lad_px[0]) - int(self.loc_player_global[0]))
                     logger.warning(
