@@ -212,6 +212,15 @@ class MapleStoryAutoBot:
         #   表现就是用户说的「后面有怪却一直在往前面砍空气」。
         self._turn_frames_left = 0
         self._turn_dir = None
+        # ★ 2026-09-29：转身期间目标换边时，把"转完该打哪边"暂存在这里。
+        #   用途见 update_cmd_by_mob_detection 的「换边抑制」说明：
+        #   目标在左右之间横跳时**不打断**正在进行的转身，否则转身永远转不完
+        #   ⇒ 一帧都出不了招（issue #12 的「原地左右抽搐但不攻击」）。
+        self._turn_pending_dir = None
+        # ★ 2026-09-29：上一次判定的攻击方向，用于**迟滞**（见 get_attack_direction）。
+        #   作用：两侧都有怪且距离相当时，防止方向逐帧翻面导致「原地左右抽搐、
+        #   一帧都不出招」（issue #12）。只在另一侧明显更近时才允许翻面。
+        self._attack_dir_last = None
         # 上次打「回正线接不上」告警的时间（节流用，避免每帧刷屏）
         self.t_last_home_fail_log = 0.0
         # 单段路线自动往返（2026-09-12 加）：只录了一段时，走到头自动掉头往回走。
@@ -2369,13 +2378,74 @@ class MapleStoryAutoBot:
             elif right_valid and not left_valid:
                 attack_direction = "right"
                 # nearest_monster = monster_right
-            elif left_valid and right_valid and distance_left < distance_right - 50:
-                attack_direction = "left"
-                # nearest_monster = monster_left
-            elif left_valid and right_valid and distance_right < distance_left - 50:
-                attack_direction = "right"
-                # nearest_monster = monster_right
-            # If both valid but distances too close, don't attack to avoid confusion
+            elif left_valid and right_valid:
+                # ── 两侧都有**合法**目标 → 选近的，不再"两边都不打"（2026-09-29 修）──
+                #
+                # 【改的是什么】原实现在这里要求「距离差 > 50px」才动手，
+                #   差距不到 50px 就返回 None（原注释：to avoid confusion）。
+                #   结果是**两侧都有怪反而比只有一侧更差**：一侧有怪必打，
+                #   两侧都有怪却一次都不出招。
+                #
+                # 【为什么是 bug 不是取舍】issue #12 用户原话实录：
+                #   「左右同时存在怪物时，角色在原地左右抽搐，但是不攻击」
+                #   —— 它不是"偶尔犹豫"，而是**持续不出招**；而"原地抽搐"
+                #   正是本函数返回 None 之后、由路线指令来回拉扯造成的观感。
+                #   更关键的是：这个函数存在的意义就是"该打哪边"，
+                #   返回 None 等于把决策权交给下游，而下游拿到 None 就 return
+                #   （见 update_cmd_by_mob_detection）⇒ 没有任何一方兜底。
+                #
+                # 【为什么改成"选近的"是安全的】两侧的怪**都已经过
+                #   get_nearest_monster 的攻击框重叠判定**（重叠面积 ≥ 阈值），
+                #   也就是说：无论朝哪边打，都不会是"打空气"。
+                #   距离差几十像素在这个前提下不影响命中，只影响先后 ——
+                #   打近的那只，下一帧冷却好了再打远的，比两边都停手强。
+                #
+                # ⚠️ 距离并列时**必须给出确定性结果**（用 <= 让 left 胜出），
+                #    不能靠浮点比较"撞运气"：并列时若两边都不满足严格小于，
+                #    又会退化成 None = 回到旧 bug。这是本改动最容易写错的一行。
+                attack_direction = "left" if distance_left <= distance_right else "right"
+
+                # ── 迟滞（hysteresis）：已选过的方向不许被"微弱优势"翻面 ────────
+                #
+                # 【为什么必须加这一步 —— 光"选近的"治不住抽搐】
+                #   上面那句只看**本帧**谁更近。但真机上两只怪都在动，
+                #   "谁更近"每帧都可能翻面 ⇒ 目标方向 left/right 逐帧横跳
+                #   ⇒ 下游转身状态机每帧都被要求转向 ⇒ 角色原地左右抽搐。
+                #
+                #   实测复现（本仓库 tools/verify_two_side_mob_attack 第 6 节）：
+                #   目标每帧翻面时，20 帧里**转向 20 次、出招 0 次** ——
+                #   因为转身永远追不上不断翻面的目标，每帧都走"只转向不出招"分支。
+                #   ⇒ 「抽搐」和「不出招」是**同一个病**的两个面。
+                #
+                # 【迟滞怎么起作用】记住上一帧的判定方向；只有当**另一侧明显更近**
+                #   （近出 `attack_hysteresis` 像素以上）时才允许翻面，
+                #   否则维持原方向。两只怪距离相当来回摆动时，方向就稳住了：
+                #   角色朝着一边打完，冷却好了再打另一边。
+                #
+                # ⚠️ 迟滞**只在"两侧都合法"时生效**：单侧有怪、或另一侧消失时，
+                #    上面两个分支已经直接定了方向，不受此影响（否则会打不到眼前的怪）。
+                # ⚠️ 迟滞窗口默认 30px（见 config 的 attack_hysteresis）；
+                #    填 0 = 关掉迟滞、退回"每帧选近的"（会重新出现抽搐，仅作对照用）。
+                try:
+                    _hyst = float(self.cfg.get("directional_attack", {})
+                                  .get("attack_hysteresis", 30) or 0)
+                except (TypeError, ValueError):
+                    _hyst = 30.0
+                _last_dir = getattr(self, "_attack_dir_last", None)
+                if _hyst > 0 and _last_dir in ("left", "right") and attack_direction != _last_dir:
+                    # 想翻面：只有当"新方向明显更近"时才准许
+                    _d_old = distance_left if _last_dir == "left" else distance_right
+                    _d_new = distance_left if attack_direction == "left" else distance_right
+                    if _d_new > _d_old - _hyst:
+                        attack_direction = _last_dir      # 优势不足 → 维持原方向
+                self._attack_dir_last = attack_direction
+
+        # 单侧分支也要记住方向，否则「另一侧怪消失」后迟滞会拿着过期方向乱判
+        if attack_direction is not None:
+            self._attack_dir_last = attack_direction
+        else:
+            # 两侧都没合法目标 → 清掉记忆，免得下次拿一个早就没怪的方向做迟滞基准
+            self._attack_dir_last = None
 
         # 2026-09-12：原来这里会在画面上写一行
         #   "L:<dist>(ok) R:<dist>(ok) Dir:<方向>" 的调试文字，按用户要求去掉
@@ -4415,11 +4485,39 @@ class MapleStoryAutoBot:
                 _turn_frames = int(self.cfg["directional_attack"].get("turn_frames", 3))
                 # getattr 兜底：离线用例里的 Stub 不走 __init__，没有这两个属性
                 _turn_left = int(getattr(self, "_turn_frames_left", 0) or 0)
-                if ((_turn_left <= 0
-                     and self.cmd_move_x_last != attack_direction)
-                        or getattr(self, "_turn_dir", None) != attack_direction):
-                    _turn_left = max(1, _turn_frames)
-                    self._turn_dir = attack_direction
+                # ── 换边抑制：目标在左右之间"横跳"时不许打断正在进行的转身 ────────
+                #
+                # 【治什么】issue #12（2026-09-29）：「左右同时存在怪物时，
+                #   角色在原地左右抽搐，但是不攻击」。
+                #   两只怪离得差不多近时，`get_attack_direction` 返回的方向
+                #   会随两怪距离的**帧间微小变化**来回翻面（左、右、左、右…）。
+                #   而下面那个条件里 "怪换边 ⇒ 重置转身计时" 是**无条件**的：
+                #   每翻一次面，`_turn_left` 就被重置回满帧数 ⇒ 转身**永远转不完**
+                #   ⇒ 每一帧都走 `_turn_left > 0` 分支并 `return`
+                #   ⇒ **一次招都出不了**，同时方向键每帧都被设成新方向
+                #   ⇒ 屏幕上就是"原地左右抽搐"。
+                #
+                # 【改法】转身进行中（_turn_left > 0）时，**不因换边而重置**；
+                #   只把"我要打哪边"记在新属性 `_turn_pending_dir` 上，
+                #   等当前这次转完、出招之后，下一轮再处理新方向。
+                #   效果：无论目标怎么横跳，**每 turn_frames 帧至少落地一次出招**，
+                #   抽搐消失，攻击不再被"犹豫"吃掉。
+                #
+                # ⚠️ 关键前提：进入这个分支时 `attack_direction` 一定不是 None
+                #    （上面 `if attack_direction is None: return` 已经拦掉），
+                #    所以"换边"必然是"换成另一个合法方向"，记下来是安全的。
+                # ⚠️ 保留原有的"朝向不对 ⇒ 起转"语义：_turn_left <= 0 时照旧。
+                _turn_dir = getattr(self, "_turn_dir", None)
+                if _turn_left <= 0:
+                    if self.cmd_move_x_last != attack_direction:
+                        _turn_left = max(1, _turn_frames)
+                        self._turn_dir = attack_direction
+                    elif _turn_dir != attack_direction:
+                        # 已经朝着目标、只是记录的转身方向过期 → 同步一下即可
+                        self._turn_dir = attack_direction
+                elif _turn_dir != attack_direction:
+                    # 转身进行中且目标换边：不改计时，只记下"转完打哪边"
+                    self._turn_pending_dir = attack_direction
                 if _turn_left > 0:
                     self.cmd_move_x = attack_direction
                     self._turn_frames_left = _turn_left - 1
@@ -4430,6 +4528,11 @@ class MapleStoryAutoBot:
                 self._turn_frames_left = 0
                 # 朝向已就位 → 松开方向键再出招（用户要的「回头打一下就继续走」：
                 # 出招后本函数不再改 cmd_move_x，下一帧由路线接管，角色继续巡逻）
+                # ⚠️ 若转身期间目标换过边，把"最新方向"落到 _turn_dir，
+                #    免得下一帧拿旧方向再判一次"换边"、白转一轮。
+                if getattr(self, "_turn_pending_dir", None) is not None:
+                    self._turn_dir = self._turn_pending_dir
+                    self._turn_pending_dir = None
                 self.cmd_action = "attack"
                 self.cmd_move_x = "none"
                 self.t_last_attack = time.time()

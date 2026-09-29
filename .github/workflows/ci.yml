@@ -76,6 +76,7 @@ jobs:
             'verify_nametag_mode_fix',
             'verify_goal_unreachable_warn',
             'verify_attack_box_stale_pos',
+            'verify_two_side_mob_attack',
             'verify_key_name_alias',
             'verify_mob_boxes',
             'verify_mob_library',
