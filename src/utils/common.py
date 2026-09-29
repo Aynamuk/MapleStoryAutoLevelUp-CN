@@ -925,6 +925,98 @@ def get_window_metrics(window_title):
     }
 
 
+# 标题栏高度自适应的容差（像素）。见 resolve_title_bar_height()。
+TITLE_BAR_TOLERANCE = 1
+
+# 已打过「自适应接管」日志的 (配置值, 实测值) 组合。
+# ⚠️ resolve_title_bar_height 在**每帧**都被调用（30fps），这条日志不去重就会刷爆日志
+#    —— 与 issue #2 的「每帧一条 ERROR」是同类错误。见该函数内的说明。
+_TITLE_BAR_LOGGED = set()
+
+
+def resolve_title_bar_height(cfg, window_title=None, tag="标题栏"):
+    r'''
+    取「本次该切掉多少行标题栏」，配置值与**真机实测值**不符时按实测值走。
+
+    ── 为什么需要它（issue #14）────────────────────────────────────────────
+    配置里的 game_window.title_bar_height 是**开发机实测的常数**（31）。
+    但标题栏高度是 **Windows 按 主题 + DPI + build 算出来的系统值**，每台机器都可能不同：
+    实测某用户机器为 27，比配置少 4px。
+
+    切多了会怎样：帧高 = 客户区高 + 标题栏 + 1，切掉 31 就只剩 765 行，
+    不够 768 → crop_frame_to_client 判定"比目标小"并返回 None →
+    引擎拿不到帧（表现为「画面大小对不上」，且录制/试读都看不到画面）。
+
+    切多但没跨过阈值时更隐蔽：不报错，**所有坐标整体上移几像素** ——
+    血蓝条 ROI 距底边本就只有约 4px，会连带读数不准。
+
+    ── 取值规则（三道闸，确保不改变正常用户的行为）────────────────────────
+      1. 量不到窗口（最小化/句柄失效/异常）→ 一律返回配置值，维持现状；
+      2. 实测值与配置值相差 ≤ TITLE_BAR_TOLERANCE(1px) → 返回配置值，行为零变化；
+      3. 只有相差 > 1px 时才用实测值接管，并打日志留证。
+
+    ── 口径说明（为什么不用 get_window_metrics）──────────────────────────
+    实测标题栏高度 = 客户区顶 - 外框顶（get_window_metrics 的 title_bar_height，
+    common.py 中 win32gui.ClientToScreen / GetWindowRect 那条路径）。
+    该路径依赖窗口未被最小化，否则 win_rect 会返回 (-32000, -32000) 之类的哨兵值
+    → 量出来的"标题栏"高达上万像素。因此这里**额外校验**：实测值必须落在
+    (0, 200) 的合理区间内，否则视为量测失败，退回配置值。
+
+    参数
+      cfg            完整配置（读 cfg["game_window"]["title_bar_height"] 当基准）
+      window_title   游戏窗口标题关键词；不给就用 cfg["game_window"]["title"]
+      tag            日志前缀
+
+    返回 int：本次应切掉的行数（配置值 或 实测值）
+    '''
+    try:
+        gw = (cfg or {}).get("game_window", {}) or {}
+        configured = int(gw.get("title_bar_height", 31))
+    except Exception:                                          # noqa: BLE001
+        return 31
+
+    title = window_title or gw.get("title")
+    if not title:
+        return configured
+
+    measured = None
+    try:
+        m = get_window_metrics(title)
+        if m:
+            measured = int(m.get("title_bar_height"))
+    except Exception as e:                                     # noqa: BLE001
+        logger.debug(f"[{tag}] 量测失败，沿用配置值 {configured}：{e}")
+        return configured
+
+    # 闸 1：量不到 / 量出离谱的值（窗口最小化时外框是 -32000 哨兵）→ 维持现状
+    if measured is None or not (0 < measured < 200):
+        logger.debug(f"[{tag}] 实测值 {measured} 不合理（窗口未还原？），"
+                     f"沿用配置值 {configured}。")
+        return configured
+
+    # 闸 2：差异在容差内 → 走配置值，正常用户行为零变化
+    if abs(measured - configured) <= TITLE_BAR_TOLERANCE:
+        return configured
+
+    # 闸 3：确实不符 → 按实测值接管，留全证据（实测值/配置值/是否接管）
+    #
+    # ⚠️ 这条日志**必须只打一次**：resolve_title_bar_height 是在**每帧**的裁剪路径上
+    #    被调用的（30fps），无条件打会瞬间刷爆日志 —— 与 issue #2 踩过的
+    #    「每帧一条 ERROR」完全同类。用模块级集合按 (配置值, 实测值) 去重：
+    #    值没变就不再打；真变了（换窗口/改配置/系统缩放变了）会重新打一次。
+    _key = (configured, measured)
+    if _key not in _TITLE_BAR_LOGGED:
+        _TITLE_BAR_LOGGED.add(_key)
+        logger.info(f"[{tag}] 【自适应】配置 title_bar_height={configured} 与实测 "
+                    f"{measured} 相差 {abs(measured - configured)}px（>容差 "
+                    f"{TITLE_BAR_TOLERANCE}px）—— 本次按**实测值 {measured}** 裁剪。\n"
+                    f"        原因：标题栏高度是系统按主题/DPI/build 算的，每台机器可能不同；\n"
+                    f"        配置值只是开发机实测的常数，本机对不上就会切多或切少。\n"
+                    f"        想永久修好：运行 `python -m tools.measure_window --write-config`，\n"
+                    f"        把本机实测值写进配置（之后这条日志就不再出现）。")
+    return measured
+
+
 def crop_frame_to_client(frame, target_size, title_bar_height, tag="帧"):
     r'''
     把「抓窗口」拿到的原始帧裁成**游戏客户区**，使帧的像素坐标 == 客户区坐标。
@@ -975,9 +1067,26 @@ def crop_frame_to_client(frame, target_size, title_bar_height, tag="帧"):
         return out, msg
 
     # 帧比目标小：不裁剪（贴黑边只会把坐标带得更偏），把问题暴露给调用方
-    return None, (f"抓到的画面 {w}x{h} 比配置的 {target_w}x{target_h} 小"
-                  f"（标题栏已切 {title_bar_height} 行）。"
-                  f"窗口是不是被改小了 / 还开着旧窗口？")
+    #
+    # ★ 2026-09-29（issue #14）：这条文案原来只说"窗口是不是被改小了"，
+    #   把矛头**全指向用户**，但实测最常见的真因是**配置切多了** ——
+    #   title_bar_height 是系统值（受主题/DPI/build 影响），配置里的 31 只是
+    #   开发机实测常数；本机真实值更小时就会切多，剩下不够目标高。
+    #   两种成因的**症状完全一样**（都表现为"抓到的画面比配置小"），
+    #   所以这里把两种可能都列出来，并给出各自的分辨办法。
+    short = target_h - h
+    return None, (
+        f"抓到的画面 {w}x{h} 比配置的 {target_w}x{target_h} 小 {short}px"
+        f"（标题栏已切 {title_bar_height} 行）。\n"
+        f"        两种可能，按顺序查：\n"
+        f"          ① **配置切多了**（更常见）：本机真实标题栏比配置的 "
+        f"{title_bar_height}px 小，导致切掉了本该保留的画面行。\n"
+        f"             分辨办法：运行 `python -m tools.measure_window`，\n"
+        f"             看它量出的「标题栏高度」是否为 {title_bar_height}；\n"
+        f"             不是就运行 `python -m tools.measure_window --write-config` 改写配置。\n"
+        f"             程序已内置自适应：相差 >1px 时会自动按实测值裁剪。\n"
+        f"          ② **游戏窗口确实变小了**：分辨率没设成 "
+        f"{target_w}x{target_h}、开了全屏/最大化、或还开着旧窗口。")
 
 
 def click_in_game_window(window_title, coord, button="left", clicks=1):

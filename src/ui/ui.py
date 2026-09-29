@@ -1655,7 +1655,8 @@ class MainWindow(QMainWindow):
             import numpy as np
             from src.input.GameWindowCapturor import GameWindowCapturor
             from src.utils.bars import BarsDetector
-            from src.utils.common import crop_frame_to_client
+            from src.utils.common import (crop_frame_to_client,
+                                          resolve_title_bar_height)
         except Exception as e:                                   # noqa: BLE001
             QMessageBox.warning(self, "试不了", f"加载识别模块失败：{e}")
             return
@@ -1703,9 +1704,10 @@ class MainWindow(QMainWindow):
         # ── 3. 裁剪 + 识别 ───────────────────────────────────────
         try:
             th, tw = self.cfg["game_window"]["size"]
+            # ★ issue #14：与引擎共用同一个自适应取值，避免"录制正常但跑起来偏"
             frame, _msg = crop_frame_to_client(
                 raw, (int(th), int(tw)),
-                self.cfg["game_window"]["title_bar_height"], tag="试读")
+                resolve_title_bar_height(self.cfg, tag="试读"), tag="试读")
             if frame is None:
                 QMessageBox.warning(
                     self, "画面大小对不上",

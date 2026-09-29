@@ -21,6 +21,7 @@ from src.utils.common import (
     get_minimap_loc_size, get_player_location_on_minimap,
     to_opencv_hsv, load_yaml, override_cfg, load_image, imwrite_unicode,
     crop_frame_to_client, active_config_path, put_text_cn,
+    resolve_title_bar_height,
 )
 from src.utils.paths import resource_path
 from src.utils.home_route import color_code_maps, collect_pixels
@@ -314,7 +315,9 @@ class RouteRecorder():
                     f"        {self._win_diag()}")
             return
 
-        title_bar = self.cfg["game_window"]["title_bar_height"]
+        # ★ issue #14：与引擎/试读共用同一个自适应取值，保证"录制的坐标系"
+        #   == "引擎跑起来时的坐标系"，不出现"录制正常但跑起来偏"。
+        title_bar = resolve_title_bar_height(self.cfg, tag="路线录制")
         target_size = self.cfg["game_window"]["size"]          # [高, 宽]
 
         img, msg = crop_frame_to_client(self.frame, target_size, title_bar, tag="路线录制")

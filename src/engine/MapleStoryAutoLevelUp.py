@@ -31,6 +31,7 @@ from src.utils.common import (find_pattern_sqdiff, draw_rectangle, screenshot, n
     click_in_game_window, mask_route_colors,
     activate_game_window, normalize_pixel_coordinate,
     get_window_client_size, crop_frame_to_client, put_text_cn,
+    resolve_title_bar_height,
     monster_detect_interval, edge_guard_step_cap,
     route_too_narrow_for_patrol,
 )
@@ -1834,8 +1835,14 @@ class MapleStoryAutoBot:
             return
 
         raw_h, raw_w = self.frame.shape[:2]
-        title_bar = self.cfg["game_window"]["title_bar_height"]
+        # ★ 2026-09-29（issue #14）：标题栏高度改为**自适应取值**。
+        #   配置里的 31 只是开发机实测常数，标题栏高度是系统按 主题/DPI/build 算的
+        #   （实测有用户机器为 27）。切多了会让帧高不足 → 返回 None → 完全抓不到画面。
+        #   取值规则与安全闸见 common.resolve_title_bar_height 的文档。
         target_h, target_w = self.cfg["game_window"]["size"]   # [height, width]
+        title_bar = resolve_title_bar_height(
+            self.cfg, window_title=getattr(self.capture, "window_title", None),
+            tag="帧几何")
 
         frame_cropped, msg = crop_frame_to_client(
             self.frame, (target_h, target_w), title_bar, tag="引擎")
