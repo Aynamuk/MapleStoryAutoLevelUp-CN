@@ -13,19 +13,31 @@
 
 ## 素材来源与转换
 
-源：怀旧冒险岛资料库（国服数据，static.mxdzlk.com/CMSCV001/images/mob/<ID>/preview.png）。
-这些 PNG 是**透明底**的官方贴图，且自带领口纯黑描边（实测 11/11 张都是
-严格 RGB(0,0,0)），因此**天然适配引擎的 contour_only 模式**——
-该模式只取纯黑像素当轮廓（见 engine 里 np.all(img == [0,0,0])）。
+源：怀旧冒险岛资料库（国服数据，static.mxdzlk.com/CMSCV001/images/mob/<ID>/preview.png）
+    的**逐帧版**（api.dreamms.gg，已实测与国服贴图同源：82/82 逐像素核对通过）。
+这些 PNG 是**透明底**的官方贴图，且自带领口纯黑描边，因此**天然适配引擎的
+contour_only 模式**——该模式只取纯黑像素当轮廓（见 engine 里 np.all(img == [0,0,0])）。
+
+## 每只怪是「多帧」不是「一张图」（2026-09-29 升级）
+
+原来每只怪只有 1 张静态图（stand 首帧），怪一走动就认不出（漏检）。
+现在每只怪有 1~9 个**动作帧**（move/stand/fly/jump），由 tools.fetch_mob_frames
+按「覆盖度」筛掉冗余帧后得到 —— 姿态单调的怪留 1~2 帧，复杂的留 6~9 帧。
+
+⚠️ 只收常态动作：出招(attack/skill)、受击(hit)、死亡(die) 都不收 ——
+   本项目挂机只打**一击即死的小怪**，这些动作在场上根本来不及出现。
 
 转换规则（与 tools/template_capture.py 的项目约定一致）：
     透明像素 → 纯绿 RGB(0,255,0)
     其余原样保留（含自带的黑描边）
-存成 monster/<中文怪名>/<中文怪名>_1.png，与引擎的加载通配完全一致。
+⚠️ 库里存的是**原始透明底图**，不是绿底成品 —— 必须如此，因为 _to_template()
+   对 3 通道图会把纯白像素当透明刷绿，而怪的眼睛/牙齿就是纯白（实测三眼章鱼
+   眼白 83 像素会被误刷成绿）。绿底图要过 _to_template 只在 4 通道输入下才安全。
+存成 monster/<中文怪名>/<中文怪名>_<动作><帧号>.png，与引擎的加载通配完全一致。
 
 ## 用法
 
-    python -m src.utils.mob_library --list          # 看库里有什么
+    python -m src.utils.mob_library --list          # 看库里有什么（含帧数）
     python -m src.utils.mob_library --install 木妖   # 装某一种到 monster/
     python -m src.utils.mob_library --install-all   # 全装
 """
@@ -112,8 +124,34 @@ def installed_mobs(root=None):
             if os.path.isdir(os.path.join(base, d)) and not d.startswith('_')}
 
 
+def mob_files(ent):
+    """索引条目 → 该怪的全部素材相对路径。
+
+    兼容两种索引格式：
+      新版：{"files": [...], ...}
+      旧版：{"file": "..."}（只有一张）
+    """
+    files = ent.get('files')
+    if isinstance(files, list) and files:
+        return [f for f in files if isinstance(f, str) and f]
+    one = ent.get('file')
+    return [one] if one else []
+
+
 def install(name, root=None, overwrite=False):
-    """把素材库里的 name 装成 monster/<name>/<name>_1.png。
+    """把素材库里的 name 装成 monster/<name>/<name>_<动作><帧号>.png。
+
+    ## 多帧（2026-09-29）
+
+    库里每只怪已从「1 张静态图」升级为「多个动作帧」（move/stand/fly/jump，
+    由 tools.fetch_mob_frames 筛掉冗余帧后得到）。本函数把**全部帧**一次装完，
+    因为引擎对每张 PNG 都要跑两次匹配（原图+镜像），只装一帧等于白搭素材。
+
+    ## 旧的单图模板会被清掉
+
+    装载前先删掉该怪目录里已有的全部 PNG（旧版装出来的 <名>_1.png 等）。
+    理由（实测）：monster/ 里的旧模板就是素材库旧素材的副本，且被新帧
+    完全覆盖（82/82，中位分数 0.000）—— 留着只是每张白花 2 次 matchTemplate。
 
     返回 'installed' / 'exists' / 'missing'。
     已存在且 overwrite=False 时不动（用户自己截的模板优先级更高，不能被覆盖）。
@@ -123,25 +161,43 @@ def install(name, root=None, overwrite=False):
     ent = idx.get(name)
     if not ent:
         return 'missing'
-    src = os.path.join(LIB_DIR, ent.get('file', ''))
-    if not os.path.isfile(src):
+    rels = mob_files(ent)
+    if not rels:
         return 'missing'
 
     dst_dir = os.path.join(root, 'monster', name)
-    dst = os.path.join(dst_dir, f'{name}_1.png')
-    if os.path.isfile(dst) and not overwrite:
-        return 'exists'
+    if os.path.isdir(dst_dir) and not overwrite:
+        # 目录里已经有该怪的模板 → 视为已装（保持旧行为，不覆盖）
+        if glob.glob(os.path.join(dst_dir, f'{name}*.png')):
+            return 'exists'
 
-    img = cv2.imdecode(np.fromfile(src, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-    tpl = _to_template(img)
-    if tpl is None:
+    # 备好全部帧再落盘：中途缺图就别把旧模板删了
+    templates = []
+    for rel in rels:
+        src = os.path.join(LIB_DIR, rel.replace('/', os.sep))
+        if not os.path.isfile(src):
+            continue
+        img = cv2.imdecode(np.fromfile(src, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        tpl = _to_template(img)
+        if tpl is not None:
+            templates.append((os.path.basename(rel), tpl))
+    if not templates:
         return 'missing'
 
     os.makedirs(dst_dir, exist_ok=True)
-    ok, buf = cv2.imencode('.png', tpl)
-    if not ok:
-        return 'missing'
-    buf.tofile(dst)          # 走 tofile 以支持中文路径（cv2.imwrite 在 Windows 中文路径会失败）
+    # 清掉旧模板（见 docstring：旧的就是素材库旧素材的副本，已被新帧覆盖）
+    for f in glob.glob(os.path.join(dst_dir, '*.png')):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+    for fn, tpl in templates:
+        ok, buf = cv2.imencode('.png', tpl)
+        if not ok:
+            continue
+        # 走 tofile 以支持中文路径（cv2.imwrite 在 Windows 中文路径会失败）
+        buf.tofile(os.path.join(dst_dir, fn))
     return 'installed'
 
 
@@ -187,7 +243,9 @@ def main():
             # 用 ASCII 记号，避免 GBK 控制台编码坑
             mark = '[已装]' if name in have else '[未装]'
             lv = idx[name].get('level', '')
-            _safe_print(f'  {mark} {name}' + (f'  (Lv{lv})' if lv else ''))
+            nf = len(mob_files(idx[name]))
+            _safe_print(f'  {mark} {name}  {nf}帧'
+                        + (f'  (Lv{lv})' if lv else ''))
         return 0
 
     if args.install_all:

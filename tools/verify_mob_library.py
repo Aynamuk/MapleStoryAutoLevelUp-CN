@@ -15,6 +15,7 @@
 
 用法：python -m tools.verify_mob_library
 """
+import glob
 import os
 import sys
 
@@ -29,7 +30,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from src.utils.mob_library import (LIB_DIR, GREEN, load_index,  # noqa: E402
-                                   install, _to_template)
+                                   mob_files, install, _to_template)
 
 FAILS = []
 
@@ -58,18 +59,24 @@ def main():
     print('\n[2] 素材文件存在且可解码')
     bad_missing, decoded = [], {}
     for name, ent in sorted(idx.items()):
-        p = os.path.join(LIB_DIR, ent.get('file', ''))
-        if not os.path.isfile(p):
-            bad_missing.append(name)
+        rels = mob_files(ent)
+        if not rels:
+            bad_missing.append(name + '(索引无 file/files)')
             continue
-        img = cv2.imdecode(np.fromfile(p, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-        if img is None:
-            bad_missing.append(name)
-            continue
-        decoded[name] = img
+        for rel in rels:
+            p = os.path.join(LIB_DIR, rel.replace('/', os.sep))
+            if not os.path.isfile(p):
+                bad_missing.append(rel)
+                continue
+            img = cv2.imdecode(np.fromfile(p, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+            if img is None:
+                bad_missing.append(rel)
+                continue
+            decoded[rel] = img
+    n_files = sum(len(mob_files(e)) for e in idx.values())
     check(not bad_missing,
-          f'{len(decoded)}/{len(idx)} 张素材可解码'
-          + (f'；缺失/坏图：{bad_missing}' if bad_missing else ''))
+          f'{len(decoded)}/{n_files} 张素材可解码'
+          + (f'；缺失/坏图：{bad_missing[:5]}' if bad_missing else ''))
 
     print('\n[3] 每张都带纯黑描边（contour_only 的前提）')
     no_black = []
@@ -81,36 +88,45 @@ def main():
             no_black.append(name)
     check(not no_black,
           '全部素材自带纯黑描边'
-          + (f'；无描边：{no_black}' if no_black else ''))
+          + (f'；无描边：{no_black[:5]}' if no_black else ''))
 
-    print('\n[4] 素材带透明通道')
+    print('\n[4] 素材带透明通道（必须是原图，不能是绿底成品）')
     no_alpha = [n for n, im in decoded.items() if im.shape[2] != 4]
     check(not no_alpha,
           '全部素材为透明底 PNG'
-          + (f'；无 alpha：{no_alpha}' if no_alpha else ''))
+          + (f'；无 alpha：{no_alpha[:5]}' if no_alpha else ''))
 
     print('\n[5] 转模板后仍是绿底 + 保留黑描边')
     import tempfile
-    probe = sorted(decoded)[0]
-    tpl = _to_template(decoded[probe])
+    # decoded 的键是相对路径（<怪名>/<文件>），取怪的**中文名**用于 install
+    probe_rel = sorted(decoded)[0]
+    probe = probe_rel.split('/')[0]
+    tpl = _to_template(decoded[probe_rel])
     ok_green = tpl is not None and bool(np.all(tpl == GREEN, axis=2).any())
     ok_black = tpl is not None and bool(np.all(tpl == [0, 0, 0], axis=2).any())
-    check(ok_green, f'{probe}：转换后含纯绿背景 RGB(0,255,0)')
-    check(ok_black, f'{probe}：转换后纯黑描边被保留（未被刷成绿）')
+    check(ok_green, f'{probe_rel}：转换后含纯绿背景 RGB(0,255,0)')
+    check(ok_black, f'{probe_rel}：转换后纯黑描边被保留（未被刷成绿）')
 
     print('\n[6] install() 端到端（临时目录，不碰真实 monster/）')
     with tempfile.TemporaryDirectory() as td:
+        want = mob_files(idx[probe])
         r1 = install(probe, root=td)
-        dst = os.path.join(td, 'monster', probe, f'{probe}_1.png')
+        dst_dir = os.path.join(td, 'monster', probe)
         check(r1 == 'installed', f'首次安装返回 installed（实际 {r1}）')
-        check(os.path.isfile(dst), f'模板落在 monster/{probe}/{probe}_1.png')
-        if os.path.isfile(dst):
-            out = cv2.imdecode(np.fromfile(dst, dtype=np.uint8), cv2.IMREAD_COLOR)
+        got = sorted(glob.glob(os.path.join(dst_dir, '*.png')))
+        check(len(got) == len(want),
+              f'装出 {len(got)} 张，索引里 {len(want)} 张（多帧应全部装上）')
+        if got:
+            out = cv2.imdecode(np.fromfile(got[0], dtype=np.uint8), cv2.IMREAD_COLOR)
             check(out is not None and out.shape[2] == 3, '落盘模板是 3 通道 BGR')
             check(out is not None and bool(np.all(out == GREEN, axis=2).any()),
                   '落盘模板背景是纯绿')
             check(out is not None and bool(np.all(out == [0, 0, 0], axis=2).any()),
                   '落盘模板保留了纯黑描边')
+            # 文件名必须以怪名开头，否则引擎通配 monster/<名>/<名>*.png 扫不到
+            scanned = glob.glob(os.path.join(dst_dir, f'{probe}*.png'))
+            check(len(scanned) == len(got),
+                  f'全部文件名以怪名开头，引擎通配能扫到（{len(scanned)}/{len(got)}）')
         # 二次安装不得覆盖（保护用户自己截的）
         r2 = install(probe, root=td)
         check(r2 == 'exists', f'重复安装返回 exists、不覆盖（实际 {r2}）')
