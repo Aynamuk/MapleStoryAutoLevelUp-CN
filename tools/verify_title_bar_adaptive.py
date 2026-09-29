@@ -215,6 +215,37 @@ check("common.py 里写明了 issue #14 的成因（系统值 vs 开发机常数
 check("裁剪失败的文案同时给出「配置切多了」这条真因（不只怪用户窗口）",
       "配置切多了" in _common_src)
 
+print("\n【6】抓帧体检不再误伤正常机器（issue #14 的第二处，F2/F3 静默失败）")
+# ---------------------------------------------------------------------------
+# template_capture.grab_game_frame 是 F2(标定名字)/F3(截怪) 共用的取图函数，
+# 里面有一段「尺寸体检」用来挡掉"标题碰巧含关键词的别的窗口"。
+# 它原来直接读**配置里**的 title_bar_height(=31)，于是把"本机标题栏更小"的
+# 正常机器误判成"抓到了别的窗口"并拒绝该帧 —— 用户表现就是**按 F2 毫无反应**
+# （控制台一闪/只打一行错误，框选窗口根本不弹）。
+_tpl_src = _src(os.path.join("tools", "template_capture.py"))
+check("抓帧体检改用自适应取值（不再读裸配置值）",
+      "resolve_title_bar_height(" in _tpl_src)
+check("抓帧体检不再用裸配置的 title_bar_height 算期望尺寸",
+      'tb = cfg["game_window"]["title_bar_height"]' not in _tpl_src)
+
+# 端到端：他的机器上体检必须通过（期望 == 实际）
+import yaml as _yaml
+
+_cfg_full = _yaml.safe_load(open(os.path.join(_ROOT, "config", "config_default.yaml"),
+                                 encoding="utf-8"))
+_h_c, _w_c = _cfg_full["game_window"]["size"]
+_tb_adaptive = _with_metrics(_mk(26))          # 他实测 26
+_exp_w, _exp_h = _w_c + 2, _h_c + _tb_adaptive + 1
+_real_w, _real_h = 1368, 795                   # 他那台实际抓到的大小
+check("他的机器上抓帧体检通过（不再被判成「别的窗口」）",
+      abs(_real_w - _exp_w) <= 2 and abs(_real_h - _exp_h) <= 2,
+      f"期望 {_exp_w}x{_exp_h} vs 实际 {_real_w}x{_real_h}")
+
+# 体检的原目的不能丢：抓到明显不是游戏的巨窗时仍必须拒绝
+_big_w, _big_h = 2546, 1433                    # 实测抓到过的资源管理器搜索窗口
+check("体检原目的未丢：抓到 2546x1433 的非游戏窗口时仍拒绝",
+      abs(_big_w - _exp_w) > 2 or abs(_big_h - _exp_h) > 2)
+
 print()
 print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项。")
 if FAIL:

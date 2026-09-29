@@ -158,10 +158,18 @@ def grab_game_frame(window_title_token, timeout=8.0):
     #   实测踩过（2026-09-10）：抓到过 2546x1433 的资源管理器搜索窗口 ——
     #   它的标题里含「冒险岛怀旧服」，又比游戏窗口大，于是按「取面积最大」把真游戏窗口挤掉了。
     #   最坑的是**全程不报错**：后面所有模板/坐标分析都建立在一张错的图上。
+    #
+    # 🔥 2026-09-29（issue #14）修正：这里原来直接读配置里的 title_bar_height(=31)，
+    #   于是把"本机真实标题栏更小"的正常机器**误判成"抓到了别的窗口"**并拒绝这一帧 ——
+    #   用户表现就是「按 F2 毫无反应、框选工具根本不弹」。那位用户真实标题栏 26，
+    #   抓帧是 1368x795 而这里期望 1368x800，差 5px > 容差 2px → 被拒。
+    #   ⇒ 改成用**自适应取值**（与引擎/录制/试读同一个入口），期望高度按本机真实值算。
+    #     体检的目的没变（挡掉明显不是游戏的窗口），只是不再把正常机器误伤。
     try:
         cfg = load_yaml(os.path.join(REPO_ROOT, "config", "config_default.yaml"))
         h_c, w_c = cfg["game_window"]["size"]
-        tb = cfg["game_window"]["title_bar_height"]
+        from src.utils.common import resolve_title_bar_height
+        tb = resolve_title_bar_height(cfg, window_title=window_title_token, tag="抓帧体检")
         exp_w, exp_h = w_c + 2, h_c + tb + 1
         if abs(img.shape[1] - exp_w) > 2 or abs(img.shape[0] - exp_h) > 2:
             print(f"[错误] 抓到 {img.shape[1]}x{img.shape[0]}，与游戏窗口应有的 {exp_w}x{exp_h} "
