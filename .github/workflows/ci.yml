@@ -83,6 +83,7 @@ jobs:
             'verify_mob_lib_ui',
             'verify_map_buttons',
             'verify_title_bar_adaptive',
+            'verify_pickup',
             'verify_ci_green_check'
           )
           # ⚠️ 注意：tools/verify_nametag_fallback_limit.py **不进 CI** ——

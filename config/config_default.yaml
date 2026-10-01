@@ -36,6 +36,20 @@ key:
   jump_cooldown: 1.0
   return_home: "home"       # 🔁 Key to use return home scroll.
 
+  # 🖱️ 自动拾取（2026-10-01 加）
+  #   用途：宠物老是挡住自己名字（国服靠名字标签定位角色，宠物一挡就找不到人），
+  #         但把宠物收起来又没人帮你捡东西了 —— 用这个键代替宠物拾取。
+  #   机制：**按一次拾取键，然后等冷却**，不是常开狂按。冷却到点后自动再按一次。
+  pickup: ""                # 🖱️ 拾取键。留空 "" = 关闭此功能（默认关）。
+  # ⏱️ 拾取冷却（秒）。**实际间隔会在 ±30% 内随机抖动**，不是精确值 ——
+  #   原因：真人按键间隔天然带抖动，写死精确周期在统计上「不像人」，
+  #   内核反作弊（NGS/GPK）做行为特征分析时这是可识别的信号。
+  #   抖动范围：pickup_cooldown × 0.7 ~ pickup_cooldown × 1.3
+  #   ⚠️ 冷却调小会让拾取**挤占攻击节奏**（拾取键和攻击键由同一个键盘线程发），
+  #      表现是打怪变慢/漏刀。建议 1.5~3.0。
+  #      低于 0.5 没意义（人不会每 0.5 秒捡一次，反而更可疑）。
+  pickup_cooldown: 2.0
+
 buff_skill:
   # 💫 Buff Skill
   # Automatically apply buff skills when the cooldowns are ready.

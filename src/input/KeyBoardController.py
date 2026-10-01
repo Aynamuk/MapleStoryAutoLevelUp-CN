@@ -5,6 +5,7 @@ Simulate user keyboard input to control character in the game
 '''
 # Standard Import
 import os
+import random
 import threading
 import time
 
@@ -146,6 +147,16 @@ class KeyBoardController():
         self.t_last_skill = 0.0 # Last time character perform action(attack, cast spell, ...)
         # 上次真正发出跳跃键的时间（跳跃冷却用，见 run() 的 jump 分支）
         self.t_last_jump = 0.0
+        # 🖱️ 自动拾取（2026-10-01 加，见 _try_pickup）
+        #   _t_next_pickup = 下一次允许按拾取键的时间戳；0 表示「还没排过队」，
+        #   第一次由 _try_pickup 用 now + 抖动间隔 排期，避免开局立刻按一下。
+        self.t_last_pickup = 0.0
+        self._t_next_pickup = 0.0
+        self.pickup_key = (self.cfg.get("key", {}) or {}).get("pickup", "") or ""
+        self.pickup_cooldown = float(
+            (self.cfg.get("key", {}) or {}).get("pickup_cooldown", 2.0) or 2.0)
+        # 计数器（供自检与日志排查）
+        self.n_pickup_sent = 0
         self.t_last_buff_cast = [0] * len(self.cfg["buff_skill"]["keys"]) # Last time cast buff skill
         # Flags
         self.is_enable = True
@@ -355,6 +366,59 @@ class KeyBoardController():
         '''
         self._press(key)
 
+    # ── 🖱️ 自动拾取（2026-10-01 加）────────────────────────────────────
+    #: 冷却随机抖动比例：实际间隔 = cooldown × uniform(1-J, 1+J)。
+    #  为什么必须抖动（而不是精确 2.0s）：真人按键间隔天然带抖动，
+    #  写死精确周期的采样标准差 ≈ 0，在内核反作弊（NGS / GPK）做
+    #  **行为特征分析**时是「不像人」的强信号。加抖动后分布互不重合。
+    PICKUP_JITTER = 0.3
+    #: 冷却下限（秒）：低于此值既不实用、也在统计上更可疑，直接抬上来。
+    PICKUP_COOLDOWN_MIN = 0.5
+
+    def _pickup_interval(self):
+        '''
+        本次拾取的**实际**间隔（秒）= 配置冷却 × [0.7, 1.3] 随机。
+        配置非法（<=0 / 非数字）时退回下限，不让它变成「每帧都按」。
+        '''
+        cd = self.pickup_cooldown
+        try:
+            cd = float(cd)
+        except (TypeError, ValueError):
+            cd = self.PICKUP_COOLDOWN_MIN
+        if cd < self.PICKUP_COOLDOWN_MIN:
+            cd = self.PICKUP_COOLDOWN_MIN
+        return cd * random.uniform(1.0 - self.PICKUP_JITTER,
+                                   1.0 + self.PICKUP_JITTER)
+
+    def _try_pickup(self, now):
+        '''
+        到了拾取时间点就点一次拾取键，并排下一次。
+
+        **这是按键触发式（按一次 → 等一个带抖动的冷却 → 再按一次），
+        不是常开狂按** —— 低频是它比「自动拾取开关」安全的原因，别改成每帧都发。
+
+        行为：
+          · pickup 配置留空 → 直接返回，功能关闭（这是默认值）。
+          · 首次调用只**排期**不按（等一个抖动间隔），避免开局立刻按一下。
+          · 时间没到 → 什么都不做（本方法每帧被调，绝大多数帧走这条路）。
+        '''
+        if not self.pickup_key:
+            return
+        if self._t_next_pickup <= 0.0:
+            self._t_next_pickup = now + self._pickup_interval()
+            return
+        if now < self._t_next_pickup:
+            return
+        self._press(self.pickup_key)
+        self.t_last_pickup = now
+        self.n_pickup_sent += 1
+        # 先排下一次，再考虑是否打日志 —— 保证日志打点不影响节奏
+        self._t_next_pickup = now + self._pickup_interval()
+        if self.n_pickup_sent == 1 or self.n_pickup_sent % 50 == 0:
+            logger.info(f"[按键·拾取] 已发送拾取键 {self.n_pickup_sent} 次"
+                        f"（键={self.pickup_key!r}，"
+                        f"下次约 {self._pickup_interval():.2f}s 后）")
+
     def limit_fps(self):
         '''
         Limit FPS
@@ -406,6 +470,12 @@ class KeyBoardController():
                 logger.info(
                     f"[按键] 已开始向游戏窗口发送按键（第一条指令："
                     f"{self.cmd_left_right} {self.cmd_up_down} {self.cmd_action}）")
+
+            # 🖱️ 自动拾取（2026-10-01 加）：到点就点一次拾取键。
+            #    放在 Buff 之前、且**不改变**任何既有指令的分支结构 ——
+            #    它是一路独立的「定时点按」，与路线/攻击指令互不干扰。
+            #    绝大多数帧会在内部直接 return（时间没到），开销可忽略。
+            self._try_pickup(time.time())
 
             # Buff skill
             for i, buff_skill_key in enumerate(self.cfg["buff_skill"]["keys"]):

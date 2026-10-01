@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QListWidget, QFileDialog, QHBoxLayout, QLineEdit,
     QPlainTextEdit, QTabWidget, QGroupBox, QFormLayout,
     QSizePolicy, QComboBox, QListWidgetItem, QScrollArea,
-    QInputDialog, QMessageBox, QDialog, QDialogButtonBox
+    QInputDialog, QMessageBox, QDialog, QDialogButtonBox, QDoubleSpinBox
 )
 from PySide6.QtGui import QTextCharFormat, QColor, QTextCursor, QPixmap, QImage, QIcon
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QProcess
@@ -871,6 +871,10 @@ class MainWindow(QMainWindow):
         self.key_binding_gbox = self.create_key_binding_gbox()
         scroll_layout.addWidget(self.key_binding_gbox)
 
+        # 🖱️ 自动拾取（2026-10-01 加）—— 紧跟按键绑定，同为「配键位」类
+        self.pickup_gbox = self.create_pickup_gbox()
+        scroll_layout.addWidget(self.pickup_gbox)
+
         # Pet function group box
         self.buff_skill_gbox = self.create_buff_skill_gbox()
         scroll_layout.addWidget(self.buff_skill_gbox)
@@ -1309,19 +1313,8 @@ class MainWindow(QMainWindow):
         columns.addSpacing(20)
         columns.addLayout(form_right)
 
-        # 挂机方式（2026-09-12：定点驻守 stand 已按用户要求删除，只剩巡逻）
-        # ⚠️ 控件保留、只留 normal 一项并禁用：apply_config_to_ui / update_cfg_from_main_ui
-        #    都按 currentData() 读写 bot.mode，直接删控件要连带改三处，没必要冒这个险。
-        self.bot_mode = QComboBox()
-        self.bot_mode.addItems(["巡逻绕圈（沿路线走）"])
-        self.bot_mode.setItemData(0, "normal")
-        self.bot_mode.setFixedWidth(180)
-        self.bot_mode.setToolTip(
-            "沿录制的路线来回走，路过打怪。\n\n"
-            "（旧版还有「定点驻守」—— 站着不动刷怪，已取消：收益不如来回走两步，"
-            "还要额外维护一个驻守点。想原地刷就把巡逻线录短一点。）")
-        self.bot_mode.setEnabled(False)
-        form_right.addRow("挂机方式：", self.bot_mode)
+        # 挂机方式（2026-10-01 按用户要求移除该控件：定点驻守早已删除，只剩
+        # 「巡逻绕圈」一项，控件没得选只剩占地方。bot.mode 固定写 "normal"。）
 
         # Field validation
         error_label = create_error_label()
@@ -1338,6 +1331,70 @@ class MainWindow(QMainWindow):
         layout.addLayout(columns)
         gbox.setLayout(layout)
         return gbox
+
+    def create_pickup_gbox(self):
+        '''
+        🖱️ 自动拾取（2026-10-01 加）
+
+        场景：国服靠名字标签定位角色，宠物老是挡住名字 → 定位不到人；
+        但把宠物收起来就没人帮捡东西了。这个功能用「按一次拾取键 + 等冷却」
+        代替宠物拾取。
+
+        ⚠️ 冷却的实际间隔 = 界面值 × 0.7~1.3 随机（见 KeyBoardController.PICKUP_JITTER），
+           界面上显示的是**基准值**。抖动不是装饰，是刻意设计：
+           精确周期在统计上不像人按的，内核反作弊做行为特征分析时是可疑信号。
+        '''
+        gbox = QGroupBox("🖱️ 自动拾取（宠物挡名字时用）")
+        form = QFormLayout()
+
+        self.pickup_cooldown = QDoubleSpinBox()
+        self.pickup_cooldown.setRange(0.5, 10.0)   # 下限 0.5：更低既没用也更可疑
+        self.pickup_cooldown.setSingleStep(0.1)
+        self.pickup_cooldown.setDecimals(1)
+        self.pickup_cooldown.setSuffix(" 秒")
+        self.pickup_cooldown.setFixedWidth(110)
+        self.pickup_cooldown.setToolTip(
+            "两次拾取之间的**基准**间隔。\n"
+            "实际间隔会在 ±30% 内随机波动（如填 2.0 → 实际 1.4~2.6 秒）。\n"
+            "⚠️ 调小会让拾取挤占攻击节奏、打怪变慢。")
+        form.addRow("拾取冷却：", self.pickup_cooldown)
+
+        self.pickup_hint = QLabel()
+        self.pickup_hint.setWordWrap(True)
+        self.pickup_hint.setStyleSheet("color: #666;")
+        form.addRow("", self.pickup_hint)
+
+        # 键或冷却一变就刷新提示，让用户实时看到「实际间隔」区间
+        # ⚠️ SingleKeyEdit 继承 QKeySequenceEdit，**没有 textChanged**
+        #   （那是 QLineEdit 的信号），要用 keySequenceChanged。
+        self.pickup_key.keySequenceChanged.connect(self.update_pickup_hint)
+        self.pickup_cooldown.valueChanged.connect(self.update_pickup_hint)
+        self.update_pickup_hint()
+
+        gbox.setLayout(form)
+        return gbox
+
+    def update_pickup_hint(self):
+        '''刷新自动拾取的说明文字（随键位/冷却实时变）。'''
+        if not self.pickup_key.get_key():
+            self.pickup_hint.setText(
+                "当前**未启用**（拾取键留空）。把「拾取」填上键位即可开启。\n"
+                "用法：收掉宠物，脚本会按「拾取键」自动捡东西。")
+            return
+        cd = self.pickup_cooldown.value()
+        # ⚠️ 必须提示「调小会挤掉攻击」：
+        #   拾取键和攻击键都由 KeyBoardController 同一个线程发（见 run()），
+        #   冷却调得太小 = 单位时间里塞进去的拾取键变多，会和攻击抢出招时机
+        #   —— 表现就是「打怪变慢 / 漏刀」。这就是第一版预览里那句提示，
+        #   2026-10-01 落地正式界面时漏掉了，用户指出后补回。
+        warn = ""
+        if cd < 1.0:
+            warn = "\n⚠️ 冷却偏小：拾取会和攻击抢出招时机，打怪会变慢。建议 ≥ 1.5 秒。"
+        self.pickup_hint.setText(
+            f"把宠物收起来，脚本每 {cd * 0.7:.1f}~{cd * 1.3:.1f} 秒按一次拾取键"
+            f"（基准 {cd:.1f} 秒，±30% 随机波动）。\n"
+            "间隔刻意不固定 —— 精确周期不像人按的，随机更稳妥。\n"
+            "冷却调小会让拾取挤占攻击节奏，打怪变慢；卡顿就调大。" + warn)
 
     def create_key_binding_gbox(self):
         gbox = QGroupBox("🎮 按键绑定")
@@ -1366,6 +1423,13 @@ class MainWindow(QMainWindow):
         self.return_home_key = SingleKeyEdit()
         self.return_home_key.setFixedWidth(100)
         form_right.addRow("回城：", self.return_home_key)
+
+        self.pickup_key = SingleKeyEdit()
+        self.pickup_key.setFixedWidth(100)
+        self.pickup_key.setToolTip(
+            "宠物挡名字时用：把宠物收起来，用这个键自动捡东西。\n"
+            "留空 = 关闭自动拾取。")
+        form_right.addRow("拾取：", self.pickup_key)
 
         # Combine left and right column form
         hbox.addLayout(form_left)
@@ -2302,12 +2366,11 @@ class MainWindow(QMainWindow):
             self.attack_range_y.setText(str(atk_cfg["range_y"]))
 
     def apply_config_to_ui(self):
-        # === 挂机方式（巡逻绕圈 / 定点驻守）===
-        mode = self.cfg["bot"].get("mode", "normal")
-        idx = self.bot_mode.findData(mode)
-        self.bot_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        # === 挂机方式 ===
+        # 界面已无该控件（2026-10-01 移除），配置里恒为 normal。
+        # 仍显式写回一次：旧配置若残留 "stand"，这里顺手纠正，免得引擎按废案跑。
 
-        # === Attack Section ===
+    # === Attack Section ===
         atk_cfg = None
         if self.cfg["bot"]["attack"] == "directional":
             self.attack_mode.setCurrentIndex(0)
@@ -2336,6 +2399,14 @@ class MainWindow(QMainWindow):
         self.aoe_skill_key.set_key(key_cfg["aoe_skill"])
         self.jump_key.set_key(key_cfg["jump"])
         self.return_home_key.set_key(key_cfg["return_home"])
+        # 🖱️ 自动拾取（2026-10-01 加）：用 .get 兜底，旧配置里没有这两个键
+        self.pickup_key.set_key(key_cfg.get("pickup", "") or "")
+        try:
+            self.pickup_cooldown.setValue(
+                float(key_cfg.get("pickup_cooldown", 2.0) or 2.0))
+        except (TypeError, ValueError):
+            self.pickup_cooldown.setValue(2.0)
+        self.update_pickup_hint()
 
         # === Buff SKills ===
         # Set MP settings default value
@@ -3624,8 +3695,8 @@ class MainWindow(QMainWindow):
         '''
         Collect setting from UI framework
         '''
-        # 挂机方式（巡逻绕圈 / 定点驻守）→ bot.mode
-        self.cfg["bot"]["mode"] = self.bot_mode.currentData() or "normal"
+        # 挂机方式：界面已无该控件（2026-10-01 移除），固定 normal
+        self.cfg["bot"]["mode"] = "normal"
 
         def _num(text, old, cast):
             """
@@ -3686,6 +3757,11 @@ class MainWindow(QMainWindow):
             self.jump_key, self.cfg["key"].get("jump"))
         self.cfg["key"]["return_home"] = _key(
             self.return_home_key, self.cfg["key"].get("return_home"))
+        # 🖱️ 自动拾取（2026-10-01 加）
+        #   注意 _key 的兜底语义：拿不到键时保留原值。拾取键**允许为空**（=关闭），
+        #   所以这里不能用 _key 的「保留原值」兜底 —— 用户清空输入框就是要关掉它。
+        self.cfg["key"]["pickup"] = self.pickup_key.get_key().strip()
+        self.cfg["key"]["pickup_cooldown"] = round(self.pickup_cooldown.value(), 2)
         # Buff skills
         if not self.checkbox_enable_buff.isChecked():
             self.cfg["buff_skill"]["keys"] = []
